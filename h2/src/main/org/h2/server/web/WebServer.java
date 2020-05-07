@@ -123,9 +123,11 @@ public class WebServer implements Service {
                 "jdbc:derby:test;create=true|sa",
         "Generic H2 (Server)|org.h2.Driver|" +
                 "jdbc:h2:tcp://localhost/~/test|sa",
-        // this will be listed on top for new installations
         "Generic H2 (Embedded)|org.h2.Driver|" +
                 "jdbc:h2:~/test|sa",
+        // this will be listed on top for new installations
+        "Generic NuoDB|com.nuodb.jdbc.Driver|" +
+                "jdbc:com.nuodb://localhost/test|" ,
     };
 
     private static int ticker;
