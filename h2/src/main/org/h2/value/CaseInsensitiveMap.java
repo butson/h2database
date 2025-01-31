@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -16,6 +16,22 @@ import org.h2.util.StringUtils;
 public class CaseInsensitiveMap<V> extends HashMap<String, V> {
 
     private static final long serialVersionUID = 1L;
+
+    /**
+     * Creates new instance of case-insensitive map.
+     */
+    public CaseInsensitiveMap() {
+    }
+
+    /**
+     * Creates new instance of case-insensitive map with specified initial
+     * capacity.
+     *
+     * @param initialCapacity the initial capacity
+     */
+    public CaseInsensitiveMap(int initialCapacity) {
+        super(initialCapacity);
+    }
 
     @Override
     public V get(Object key) {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,24 +11,25 @@ import org.h2.constraint.Constraint;
 import org.h2.constraint.Constraint.Type;
 import org.h2.constraint.ConstraintActionType;
 import org.h2.engine.Right;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.schema.Schema;
+import org.h2.table.Table;
 
 /**
  * This class represents the statement
  * ALTER TABLE DROP CONSTRAINT
  */
-public class AlterTableDropConstraint extends SchemaCommand {
+public class AlterTableDropConstraint extends AlterTable {
 
     private String constraintName;
     private final boolean ifExists;
     private ConstraintActionType dropAction;
 
-    public AlterTableDropConstraint(Session session, Schema schema, boolean ifExists) {
+    public AlterTableDropConstraint(SessionLocal session, Schema schema, boolean ifExists) {
         super(session, schema);
         this.ifExists = ifExists;
-        dropAction = session.getDatabase().getSettings().dropRestrict ?
+        dropAction = getDatabase().getSettings().dropRestrict ?
                 ConstraintActionType.RESTRICT : ConstraintActionType.CASCADE;
     }
 
@@ -41,29 +42,34 @@ public class AlterTableDropConstraint extends SchemaCommand {
     }
 
     @Override
-    public int update() {
-        session.commit(true);
+    public long update(Table table) {
         Constraint constraint = getSchema().findConstraint(session, constraintName);
         Type constraintType;
-        if (constraint == null || (constraintType = constraint.getConstraintType()) == Type.DOMAIN) {
+        if (constraint == null || (constraintType = constraint.getConstraintType()) == Type.DOMAIN
+                || constraint.getTable() != table) {
             if (!ifExists) {
                 throw DbException.get(ErrorCode.CONSTRAINT_NOT_FOUND_1, constraintName);
             }
         } else {
-            session.getUser().checkRight(constraint.getTable(), Right.ALL);
-            session.getUser().checkRight(constraint.getRefTable(), Right.ALL);
-            if (constraintType == Type.PRIMARY_KEY || constraintType == Type.UNIQUE) {
+            Table refTable = constraint.getRefTable();
+            if (refTable != table) {
+                session.getUser().checkTableRight(refTable, Right.SCHEMA_OWNER);
+            }
+            if (constraintType.isUnique()) {
                 for (Constraint c : constraint.getTable().getConstraints()) {
                     if (c.getReferencedConstraint() == constraint) {
                         if (dropAction == ConstraintActionType.RESTRICT) {
                             throw DbException.get(ErrorCode.CONSTRAINT_IS_USED_BY_CONSTRAINT_2,
                                     constraint.getTraceSQL(), c.getTraceSQL());
                         }
-                        session.getUser().checkRight(c.getTable(), Right.ALL);
+                        Table t = c.getTable();
+                        if (t != table && t != refTable) {
+                            session.getUser().checkTableRight(t, Right.SCHEMA_OWNER);
+                        }
                     }
                 }
             }
-            session.getDatabase().removeSchemaObject(session, constraint);
+            getDatabase().removeSchemaObject(session, constraint);
         }
         return 0;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0, and the
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0, and the
  * EPL 1.0 (https://h2database.com/html/license.html). Initial Developer: H2
  * Group
  */
@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import org.h2.engine.SessionRemote;
 import org.h2.message.DbException;
+import org.h2.mvstore.DataUtils;
 
 /**
  * An input stream used by the client side of a tcp connection to fetch LOB data
@@ -57,19 +58,13 @@ public class LobStorageRemoteInputStream extends InputStream {
         try {
             length = sessionRemote.readLob(lobId, hmac, pos, buff, off, length);
         } catch (DbException e) {
-            throw DbException.convertToIOException(e);
+            throw DataUtils.convertToIOException(e);
         }
         if (length == 0) {
             return -1;
         }
         pos += length;
         return length;
-    }
-
-    @Override
-    public long skip(long n) {
-        pos += n;
-        return n;
     }
 
 }

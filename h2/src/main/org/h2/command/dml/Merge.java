@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -14,8 +14,7 @@ import org.h2.command.CommandInterface;
 import org.h2.command.query.Query;
 import org.h2.engine.DbObject;
 import org.h2.engine.Right;
-import org.h2.engine.Session;
-import org.h2.engine.UndoLogRecord;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.Parameter;
 import org.h2.expression.ValueExpression;
@@ -26,9 +25,12 @@ import org.h2.result.ResultInterface;
 import org.h2.result.ResultTarget;
 import org.h2.result.Row;
 import org.h2.table.Column;
+import org.h2.table.DataChangeDeltaTable;
 import org.h2.table.DataChangeDeltaTable.ResultOption;
 import org.h2.table.Table;
 import org.h2.util.HasSQL;
+import org.h2.value.DataType;
+import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 import org.h2.value.ValueNull;
 
@@ -38,7 +40,7 @@ import org.h2.value.ValueNull;
  * or the MySQL compatibility statement
  * REPLACE
  */
-public class Merge extends CommandWithValues implements DataChangeStatement {
+public final class Merge extends CommandWithValues {
 
     private boolean isReplace;
 
@@ -48,11 +50,7 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
     private Query query;
     private Update update;
 
-    private ResultTarget deltaChangeCollector;
-
-    private ResultOption deltaChangeCollectionMode;
-
-    public Merge(Session session, boolean isReplace) {
+    public Merge(SessionLocal session, boolean isReplace) {
         super(session);
         this.isReplace = isReplace;
     }
@@ -87,17 +85,10 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
     }
 
     @Override
-    public void setDeltaChangeCollector(ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
-        this.deltaChangeCollector = deltaChangeCollector;
-        this.deltaChangeCollectionMode = deltaChangeCollectionMode;
-        update.setDeltaChangeCollector(deltaChangeCollector, deltaChangeCollectionMode);
-    }
-
-    @Override
-    public int update() {
-        int count = 0;
-        session.getUser().checkRight(table, Right.INSERT);
-        session.getUser().checkRight(table, Right.UPDATE);
+    public long update(ResultTarget deltaChangeCollector, ResultOption deltaChangeCollectionMode) {
+        long count = 0;
+        session.getUser().checkTableRight(table, Right.INSERT);
+        session.getUser().checkTableRight(table, Right.UPDATE);
         setCurrentRowNumber(0);
         if (!valuesExpressionList.isEmpty()) {
             // process values in list
@@ -117,14 +108,14 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
                         }
                     }
                 }
-                count += merge(newRow, expr);
+                count += merge(newRow, expr, deltaChangeCollector, deltaChangeCollectionMode);
             }
         } else {
             // process select data for list
             query.setNeverLazy(true);
             ResultInterface rows = query.query(0);
             table.fire(session, Trigger.UPDATE | Trigger.INSERT, true);
-            table.lock(session, true, false);
+            table.lock(session, Table.WRITE_LOCK);
             while (rows.next()) {
                 Value[] r = rows.currentRow();
                 Row newRow = table.getTemplateRow();
@@ -132,7 +123,7 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
                 for (int j = 0; j < columns.length; j++) {
                     newRow.setValue(columns[j].getColumnId(), r[j]);
                 }
-                count += merge(newRow, null);
+                count += merge(newRow, null, deltaChangeCollector, deltaChangeCollectionMode);
             }
             rows.close();
             table.fire(session, Trigger.UPDATE | Trigger.INSERT, false);
@@ -145,11 +136,14 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
      *
      * @param row row to replace
      * @param expressions source expressions, or null
+     * @param deltaChangeCollector target result
+     * @param deltaChangeCollectionMode collection mode
      * @return 1 if row was inserted, 1 if row was updated by a MERGE statement,
      *         and 2 if row was updated by a REPLACE statement
      */
-    private int merge(Row row, Expression[] expressions) {
-        int count;
+    private int merge(Row row, Expression[] expressions, ResultTarget deltaChangeCollector,
+            ResultOption deltaChangeCollectionMode) {
+        long count;
         if (update == null) {
             // if there is no valid primary key,
             // the REPLACE statement degenerates to an INSERT
@@ -159,7 +153,7 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
             int j = 0;
             for (int i = 0, l = columns.length; i < l; i++) {
                 Column col = columns[i];
-                if (col.getGenerated()) {
+                if (col.isGeneratedAlways()) {
                     if (expressions == null || expressions[i] != ValueExpression.DEFAULT) {
                         throw DbException.get(ErrorCode.GENERATED_COLUMN_CANNOT_BE_ASSIGNED_1,
                                 col.getSQLWithTable(new StringBuilder(), HasSQL.TRACE_SQL_FLAGS).toString());
@@ -167,7 +161,7 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
                 } else {
                     Value v = row.getValue(col.getColumnId());
                     if (v == null) {
-                        Expression defaultExpression = col.getDefaultExpression();
+                        Expression defaultExpression = col.getEffectiveDefaultExpression();
                         v = defaultExpression != null ? defaultExpression.getValue(session) : ValueNull.INSTANCE;
                     }
                     k.get(j++).setValue(v);
@@ -178,27 +172,41 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
                 if (v == null) {
                     throw DbException.get(ErrorCode.COLUMN_CONTAINS_NULL_VALUES_1, col.getTraceSQL());
                 }
-                k.get(j++).setValue(v);
+                TypeInfo colType = col.getType();
+                check: {
+                    TypeInfo rightType = v.getType();
+                    if (session.getMode().numericWithBooleanComparison) {
+                        int lValueType = colType.getValueType();
+                        if (lValueType == Value.BOOLEAN) {
+                            if (DataType.isNumericType(rightType.getValueType())) {
+                                break check;
+                            }
+                        } else if (DataType.isNumericType(lValueType) && rightType.getValueType() == Value.BOOLEAN) {
+                            break check;
+                        }
+                    }
+                    TypeInfo.checkComparable(colType, rightType);
+                }
+                k.get(j++).setValue(v.convertForAssignTo(colType, session, col));
             }
-            count = update.update();
+            count = update.update(deltaChangeCollector, deltaChangeCollectionMode);
         }
         // if update fails try an insert
         if (count == 0) {
             try {
-                table.validateConvertUpdateSequence(session, row);
+                table.convertInsertRow(session, row, null);
                 if (deltaChangeCollectionMode == ResultOption.NEW) {
                     deltaChangeCollector.addRow(row.getValueList().clone());
                 }
                 if (!table.fireBeforeRow(session, null, row)) {
-                    table.lock(session, true, false);
+                    table.lock(session, Table.WRITE_LOCK);
                     table.addRow(session, row);
-                    if (deltaChangeCollectionMode == ResultOption.FINAL) {
-                        deltaChangeCollector.addRow(row.getValueList());
-                    }
-                    session.log(table, UndoLogRecord.INSERT, row);
+                    DataChangeDeltaTable.collectInsertedFinalRow(session, table, deltaChangeCollector,
+                            deltaChangeCollectionMode, row);
                     table.fireAfterRow(session, null, row, false);
-                } else if (deltaChangeCollectionMode == ResultOption.FINAL) {
-                    deltaChangeCollector.addRow(row.getValueList());
+                } else {
+                    DataChangeDeltaTable.collectInsertedFinalRow(session, table, deltaChangeCollector,
+                            deltaChangeCollectionMode, row);
                 }
                 return 1;
             } catch (DbException e) {
@@ -241,8 +249,8 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
     }
 
     @Override
-    public String getPlanSQL(int sqlFlags) {
-        StringBuilder builder = new StringBuilder(isReplace ? "REPLACE INTO " : "MERGE INTO ");
+    public StringBuilder getPlanSQL(StringBuilder builder, int sqlFlags) {
+        builder.append(isReplace ? "REPLACE INTO " : "MERGE INTO ");
         table.getSQL(builder, sqlFlags).append('(');
         Column.writeColumns(builder, columns, sqlFlags);
         builder.append(')');
@@ -259,18 +267,16 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
                 if (row++ > 0) {
                     builder.append(", ");
                 }
-                builder.append('(');
-                Expression.writeExpressions(builder, expr, sqlFlags);
-                builder.append(')');
+                Expression.writeExpressions(builder.append('('), expr, sqlFlags).append(')');
             }
         } else {
-            builder.append(query.getPlanSQL(sqlFlags));
+            query.getPlanSQL(builder, sqlFlags);
         }
-        return builder.toString();
+        return builder;
     }
 
     @Override
-    public void prepare() {
+    void doPrepare() {
         if (columns == null) {
             if (!valuesExpressionList.isEmpty() && valuesExpressionList.get(0).length == 0) {
                 // special case where table is used as a sequence
@@ -324,7 +330,7 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
         boolean hasColumn = false;
         for (int i = 0, l = columns.length; i < l; i++) {
             Column column = columns[i];
-            if (!column.getGenerated()) {
+            if (!column.isGeneratedAlways()) {
                 if (hasColumn) {
                     builder.append(", ");
                 }
@@ -332,18 +338,12 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
                 column.getSQL(builder, HasSQL.DEFAULT_SQL_FLAGS).append("=?");
             }
         }
+        if (!hasColumn) {
+            throw DbException.getSyntaxError(sqlStatement, sqlStatement.length(),
+                    "Valid MERGE INTO statement with at least one updatable column");
+        }
         Column.writeColumns(builder.append(" WHERE "), keys, " AND ", "=?", HasSQL.DEFAULT_SQL_FLAGS);
         update = (Update) session.prepare(builder.toString());
-    }
-
-    @Override
-    public boolean isTransactional() {
-        return true;
-    }
-
-    @Override
-    public ResultInterface queryMeta() {
-        return null;
     }
 
     @Override
@@ -357,14 +357,10 @@ public class Merge extends CommandWithValues implements DataChangeStatement {
     }
 
     @Override
-    public boolean isCacheable() {
-        return true;
-    }
-
-    @Override
     public void collectDependencies(HashSet<DbObject> dependencies) {
         if (query != null) {
             query.collectDependencies(dependencies);
         }
     }
+
 }

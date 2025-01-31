@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -208,12 +208,6 @@ CREATE INDEX A_IDX_ASC ON TEST(A ASC);
 CREATE INDEX A_IDX_ASC_NL ON TEST(A ASC NULLS LAST);
 > ok
 
-CREATE INDEX A_IDX_DESC ON TEST(A DESC);
-> ok
-
-CREATE INDEX A_IDX_DESC_NF ON TEST(A DESC NULLS FIRST);
-> ok
-
 EXPLAIN SELECT A FROM TEST ORDER BY A;
 >> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC */ ORDER BY 1 /* index sorted */
 
@@ -227,6 +221,39 @@ EXPLAIN SELECT A FROM TEST ORDER BY A NULLS LAST;
 >> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC_NL */ ORDER BY 1 NULLS LAST /* index sorted */
 
 EXPLAIN SELECT A FROM TEST ORDER BY A DESC;
+>> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC */ ORDER BY 1 DESC /* index sorted */
+
+EXPLAIN SELECT A FROM TEST ORDER BY A DESC NULLS FIRST;
+>> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC_NL */ ORDER BY 1 DESC NULLS FIRST /* index sorted */
+
+EXPLAIN SELECT A FROM TEST ORDER BY A DESC NULLS LAST;
+>> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC */ ORDER BY 1 DESC NULLS LAST /* index sorted */
+
+DROP INDEX A_IDX_ASC;
+> ok
+
+DROP INDEX A_IDX_ASC_NL;
+> ok
+
+CREATE INDEX A_IDX_DESC ON TEST(A DESC);
+> ok
+
+CREATE INDEX A_IDX_DESC_NF ON TEST(A DESC NULLS FIRST);
+> ok
+
+EXPLAIN SELECT A FROM TEST ORDER BY A;
+>> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC */ ORDER BY 1 /* index sorted */
+
+EXPLAIN SELECT A FROM TEST ORDER BY A ASC;
+>> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC */ ORDER BY 1 /* index sorted */
+
+EXPLAIN SELECT A FROM TEST ORDER BY A NULLS FIRST;
+>> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC */ ORDER BY 1 NULLS FIRST /* index sorted */
+
+EXPLAIN SELECT A FROM TEST ORDER BY A NULLS LAST;
+>> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC_NF */ ORDER BY 1 NULLS LAST /* index sorted */
+
+EXPLAIN SELECT A FROM TEST ORDER BY A DESC;
 >> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC */ ORDER BY 1 DESC /* index sorted */
 
 EXPLAIN SELECT A FROM TEST ORDER BY A DESC NULLS FIRST;
@@ -234,39 +261,6 @@ EXPLAIN SELECT A FROM TEST ORDER BY A DESC NULLS FIRST;
 
 EXPLAIN SELECT A FROM TEST ORDER BY A DESC NULLS LAST;
 >> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC */ ORDER BY 1 DESC NULLS LAST /* index sorted */
-
-DROP INDEX A_IDX_ASC;
-> ok
-
-DROP INDEX A_IDX_DESC;
-> ok
-
-CREATE INDEX A_IDX_ASC_NF ON TEST(A ASC NULLS FIRST);
-> ok
-
-CREATE INDEX A_IDX_DESC_NL ON TEST(A DESC NULLS LAST);
-> ok
-
-EXPLAIN SELECT A FROM TEST ORDER BY A;
->> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC_NF */ ORDER BY 1 /* index sorted */
-
-EXPLAIN SELECT A FROM TEST ORDER BY A ASC;
->> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC_NF */ ORDER BY 1 /* index sorted */
-
-EXPLAIN SELECT A FROM TEST ORDER BY A NULLS FIRST;
->> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC_NF */ ORDER BY 1 NULLS FIRST /* index sorted */
-
-EXPLAIN SELECT A FROM TEST ORDER BY A NULLS LAST;
->> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_ASC_NL */ ORDER BY 1 NULLS LAST /* index sorted */
-
-EXPLAIN SELECT A FROM TEST ORDER BY A DESC;
->> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC_NL */ ORDER BY 1 DESC /* index sorted */
-
-EXPLAIN SELECT A FROM TEST ORDER BY A DESC NULLS FIRST;
->> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC_NF */ ORDER BY 1 DESC NULLS FIRST /* index sorted */
-
-EXPLAIN SELECT A FROM TEST ORDER BY A DESC NULLS LAST;
->> SELECT "A" FROM "PUBLIC"."TEST" /* PUBLIC.A_IDX_DESC_NL */ ORDER BY 1 DESC NULLS LAST /* index sorted */
 
 DROP TABLE TEST;
 > ok
@@ -407,6 +401,877 @@ SELECT * FROM TEST WHERE _ROWID_ >= 2 AND _ROWID_ <= 3;
 > 2.0
 > 3.0
 > rows: 2
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE P AS SELECT 1 ID, GEOMETRY 'POLYGON ((160 280, 240 280, 240 140, 160 140, 160 280))' G;
+> ok
+
+CREATE INDEX ID_IDX ON P(ID);
+> ok
+
+CREATE SPATIAL INDEX P_G_INDEX ON P(G);
+> ok
+
+CREATE TABLE T AS SELECT 1 ID, 'A' K, 'A' V;
+> ok
+
+CREATE INDEX T_K_IDX ON T(K);
+> ok
+
+EXPLAIN SELECT P.ID, G, MAX(CASE WHEN K = 'A' THEN V END) AS A, MAX(CASE WHEN K = 'B' THEN V END) AS B
+    FROM P JOIN T USING(ID)
+    WHERE K IN ('A', 'C')
+    AND G && GEOMETRY 'POLYGON ((198.5 186.5, 269.5 186.5, 269.5 115, 198.5 115, 198.5 186.5))'
+    GROUP BY P.ID;
+>> SELECT "P"."ID", "G", MAX(CASE WHEN "K" = 'A' THEN "V" END) AS "A", MAX(CASE WHEN "K" = 'B' THEN "V" END) AS "B" FROM "PUBLIC"."T" /* PUBLIC.T_K_IDX: K IN('A', 'C') */ /* WHERE K IN('A', 'C') */ INNER JOIN "PUBLIC"."P" /* PUBLIC.ID_IDX: ID = PUBLIC.T.ID */ ON 1=1 WHERE (("K" IN('A', 'C')) AND ("G" && GEOMETRY 'POLYGON ((198.5 186.5, 269.5 186.5, 269.5 115, 198.5 115, 198.5 186.5))')) AND ("PUBLIC"."P"."ID" = "PUBLIC"."T"."ID") GROUP BY "P"."ID"
+
+DROP TABLE P, T;
+> ok
+
+CREATE TABLE TEST(A BIGINT PRIMARY KEY, B BIGINT UNIQUE);
+> ok
+
+INSERT INTO TEST VALUES (-9223372036854775808, -9223372036854775808), (0, 0),
+    (9223372036854775807, 9223372036854775807);
+> update count: 3
+
+SELECT * FROM TEST WHERE A > 'NaN'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'NaN'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'NaN'::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'NaN'::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 'Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'Infinity'::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'Infinity'::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 1E19::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 1E19::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > '-Infinity'::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B > '-Infinity'::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < '-Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < '-Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > -1E19::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B > -1E19::REAL;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < -1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < -1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > 'NaN'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'NaN'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'NaN'::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'NaN'::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 'Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'Infinity'::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'Infinity'::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 1E19::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 1E19::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > '-Infinity'::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B > '-Infinity'::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < '-Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < '-Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > -1E19::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B > -1E19::DOUBLE PRECISION;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < -1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < -1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > 9223372036854775808::NUMERIC;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 9223372036854775808::NUMERIC;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A >= 9223372036854775807::NUMERIC;
+> A                   B
+> ------------------- -------------------
+> 9223372036854775807 9223372036854775807
+> rows: 1
+
+SELECT * FROM TEST WHERE B >= 9223372036854775807::NUMERIC;
+> A                   B
+> ------------------- -------------------
+> 9223372036854775807 9223372036854775807
+> rows: 1
+
+SELECT * FROM TEST WHERE A < 9223372036854775808::NUMERIC;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 9223372036854775808::NUMERIC;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < 9223372036854775807::NUMERIC;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> rows: 2
+
+SELECT * FROM TEST WHERE B < 9223372036854775807::NUMERIC;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> rows: 2
+
+SELECT * FROM TEST WHERE A > -9223372036854775809::NUMERIC;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B > -9223372036854775809::NUMERIC;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < -9223372036854775809::NUMERIC;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < -9223372036854775809::NUMERIC;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > 'NaN'::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'NaN'::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'NaN'::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'NaN'::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 'Infinity'::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'Infinity'::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'Infinity'::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'Infinity'::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 9223372036854775808::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 9223372036854775808::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 9223372036854775808::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 9223372036854775808::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A > '-Infinity'::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B > '-Infinity'::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < '-Infinity'::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < '-Infinity'::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > -9223372036854775809::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE B > -9223372036854775809::DECFLOAT;
+> A                    B
+> -------------------- --------------------
+> -9223372036854775808 -9223372036854775808
+> 0                    0
+> 9223372036854775807  9223372036854775807
+> rows: 3
+
+SELECT * FROM TEST WHERE A < -9223372036854775809::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < -9223372036854775809::DECFLOAT;
+> A B
+> - -
+> rows: 0
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(A TINYINT PRIMARY KEY, B TINYINT UNIQUE);
+> ok
+
+INSERT INTO TEST VALUES (-128, -128), (0, 0), (127, 127);
+> update count: 3
+
+SELECT * FROM TEST WHERE A > 'NaN'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'NaN'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'NaN'::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'NaN'::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 'Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'Infinity'::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'Infinity'::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 1E19::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 1E19::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A > '-Infinity'::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B > '-Infinity'::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A < '-Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < '-Infinity'::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > -1E19::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B > -1E19::REAL;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A < -1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < -1E19::REAL;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > 'NaN'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'NaN'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'NaN'::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'NaN'::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 'Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 'Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 'Infinity'::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 'Infinity'::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A > 1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B > 1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A < 1E19::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B < 1E19::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A > '-Infinity'::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B > '-Infinity'::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A < '-Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < '-Infinity'::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE A > -1E19::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE B > -1E19::DOUBLE PRECISION;
+> A    B
+> ---- ----
+> -128 -128
+> 0    0
+> 127  127
+> rows: 3
+
+SELECT * FROM TEST WHERE A < -1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+SELECT * FROM TEST WHERE B < -1E19::DOUBLE PRECISION;
+> A B
+> - -
+> rows: 0
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(G GEOMETRY) AS VALUES GEOMETRY 'POINT(3 0)', GEOMETRY 'POINT(1 1)', GEOMETRY 'POINT(2 2)';
+> ok
+
+SELECT * FROM TEST ORDER BY G;
+> G
+> -----------
+> POINT (1 1)
+> POINT (2 2)
+> POINT (3 0)
+> rows (ordered): 3
+
+SELECT * FROM TEST ORDER BY G DESC;
+> G
+> -----------
+> POINT (3 0)
+> POINT (2 2)
+> POINT (1 1)
+> rows (ordered): 3
+
+CREATE SPATIAL INDEX ON TEST(G);
+> ok
+
+EXPLAIN SELECT * FROM TEST ORDER BY G;
+>> SELECT "PUBLIC"."TEST"."G" FROM "PUBLIC"."TEST" /* PUBLIC.INDEX_2 */ ORDER BY 1 /* index sorted */
+
+EXPLAIN SELECT * FROM TEST ORDER BY G DESC;
+>> SELECT "PUBLIC"."TEST"."G" FROM "PUBLIC"."TEST" /* PUBLIC.INDEX_2 */ ORDER BY 1 DESC /* index sorted */
+
+SELECT * FROM TEST ORDER BY G;
+> G
+> -----------
+> POINT (1 1)
+> POINT (2 2)
+> POINT (3 0)
+> rows (ordered): 3
+
+SELECT * FROM TEST ORDER BY G DESC;
+> G
+> -----------
+> POINT (3 0)
+> POINT (2 2)
+> POINT (1 1)
+> rows (ordered): 3
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(ID INT);
+> ok
+
+INSERT INTO TEST VALUES 1, 2;
+> update count: 2
+
+SELECT _ROWID_, * FROM TEST ORDER BY _ROWID_ DESC;
+> _ROWID_ ID
+> ------- --
+> 2       2
+> 1       1
+> rows (ordered): 2
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(C INT PRIMARY KEY);
+> ok
+
+EXPLAIN SELECT * FROM TEST A JOIN TEST B USING(C) ORDER BY A.C ASC FETCH FIRST 10 ROWS ONLY;
+>> SELECT "A"."C" FROM "PUBLIC"."TEST" "A" /* PUBLIC.PRIMARY_KEY_2 */ INNER JOIN "PUBLIC"."TEST" "B" /* PUBLIC.PRIMARY_KEY_2: C = A.C */ ON 1=1 WHERE "A"."C" = "B"."C" ORDER BY 1 FETCH FIRST 10 ROWS ONLY /* index sorted */
+
+EXPLAIN SELECT * FROM TEST A JOIN TEST B USING(C) ORDER BY A.C DESC FETCH FIRST 10 ROWS ONLY;
+>> SELECT "A"."C" FROM "PUBLIC"."TEST" "A" /* PUBLIC.PRIMARY_KEY_2 */ INNER JOIN "PUBLIC"."TEST" "B" /* PUBLIC.PRIMARY_KEY_2: C = A.C */ ON 1=1 WHERE "A"."C" = "B"."C" ORDER BY 1 DESC FETCH FIRST 10 ROWS ONLY /* index sorted */
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(C INT UNIQUE);
+> ok
+
+EXPLAIN SELECT * FROM TEST A JOIN TEST B USING(C) ORDER BY A.C ASC FETCH FIRST 10 ROWS ONLY;
+>> SELECT "A"."C" FROM "PUBLIC"."TEST" "A" /* PUBLIC.CONSTRAINT_INDEX_2 */ INNER JOIN "PUBLIC"."TEST" "B" /* PUBLIC.CONSTRAINT_INDEX_2: C = A.C */ ON 1=1 WHERE "A"."C" = "B"."C" ORDER BY 1 FETCH FIRST 10 ROWS ONLY /* index sorted */
+
+EXPLAIN SELECT * FROM TEST A JOIN TEST B USING(C) ORDER BY A.C DESC FETCH FIRST 10 ROWS ONLY;
+>> SELECT "A"."C" FROM "PUBLIC"."TEST" "A" /* PUBLIC.CONSTRAINT_INDEX_2 */ INNER JOIN "PUBLIC"."TEST" "B" /* PUBLIC.CONSTRAINT_INDEX_2: C = A.C */ ON 1=1 WHERE "A"."C" = "B"."C" ORDER BY 1 DESC FETCH FIRST 10 ROWS ONLY /* index sorted */
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(X INT, Y INT, UNIQUE(X, Y));
+> ok
+
+EXPLAIN SELECT * FROM TEST A JOIN TEST B USING(X, Y) ORDER BY A.X, A.Y FETCH FIRST 10 ROWS ONLY;
+>> SELECT "A"."X", "A"."Y" FROM "PUBLIC"."TEST" "A" /* PUBLIC.CONSTRAINT_INDEX_2 */ INNER JOIN "PUBLIC"."TEST" "B" /* PUBLIC.CONSTRAINT_INDEX_2: X = A.X AND Y = A.Y */ ON 1=1 WHERE ("A"."X" = "B"."X") AND ("A"."Y" = "B"."Y") ORDER BY 1, 2 FETCH FIRST 10 ROWS ONLY /* index sorted */
+
+EXPLAIN SELECT * FROM TEST A JOIN TEST B USING(X, Y) ORDER BY A.X DESC, A.Y FETCH FIRST 10 ROWS ONLY;
+>> SELECT "A"."X", "A"."Y" FROM "PUBLIC"."TEST" "A" /* PUBLIC.CONSTRAINT_INDEX_2 */ INNER JOIN "PUBLIC"."TEST" "B" /* PUBLIC.CONSTRAINT_INDEX_2: X = A.X AND Y = A.Y */ ON 1=1 WHERE ("A"."X" = "B"."X") AND ("A"."Y" = "B"."Y") ORDER BY 1 DESC, 2 FETCH FIRST 10 ROWS ONLY /* index sorted: 1 of 2 columns */
 
 DROP TABLE TEST;
 > ok

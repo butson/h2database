@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,22 +7,21 @@ package org.h2.constraint;
 
 import java.util.HashSet;
 import org.h2.engine.DbObject;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionVisitor;
 import org.h2.index.Index;
 import org.h2.message.Trace;
 import org.h2.result.Row;
 import org.h2.schema.Schema;
-import org.h2.schema.SchemaObjectBase;
+import org.h2.schema.SchemaObject;
 import org.h2.table.Column;
 import org.h2.table.Table;
 
 /**
  * The base class for constraint checking.
  */
-public abstract class Constraint extends SchemaObjectBase implements
-        Comparable<Constraint> {
+public abstract class Constraint extends SchemaObject implements Comparable<Constraint> {
 
     public enum Type {
         /**
@@ -52,13 +51,33 @@ public abstract class Constraint extends SchemaObjectBase implements
          * @return standard SQL type name
          */
         public String getSqlName() {
-            if (this == Constraint.Type.PRIMARY_KEY) {
+            if (this == PRIMARY_KEY) {
                 return "PRIMARY KEY";
             }
-            if (this == Constraint.Type.REFERENTIAL) {
+            if (this == REFERENTIAL) {
                 return "FOREIGN KEY";
             }
             return name();
+        }
+
+        /**
+         * Tests whether this type is a check or domain type or not.
+         *
+         * @return {@code true} if this type is a check or a domain type,
+         *         {@code false} otherwise
+         */
+        public boolean isCheck() {
+            return this == CHECK || this == DOMAIN;
+        }
+
+        /**
+         * Tests whether this type is a primary key or unique or not.
+         *
+         * @return {@code true} if this type is a primary key or unique type,
+         *         {@code false} otherwise
+         */
+        public boolean isUnique() {
+            return this == PRIMARY_KEY || this == UNIQUE;
         }
 
     }
@@ -92,7 +111,7 @@ public abstract class Constraint extends SchemaObjectBase implements
      * @param oldRow the old row
      * @param newRow the new row
      */
-    public abstract void checkRow(Session session, Table t, Row oldRow, Row newRow);
+    public abstract void checkRow(SessionLocal session, Table t, Row oldRow, Row newRow);
 
     /**
      * Check if this constraint needs the specified index.
@@ -146,7 +165,7 @@ public abstract class Constraint extends SchemaObjectBase implements
      *
      * @param session the session
      */
-    public abstract void checkExistingData(Session session);
+    public abstract void checkExistingData(SessionLocal session);
 
     /**
      * This method is called after a related table has changed
@@ -192,11 +211,6 @@ public abstract class Constraint extends SchemaObjectBase implements
             return 0;
         }
         return Integer.compare(getConstraintType().ordinal(), other.getConstraintType().ordinal());
-    }
-
-    @Override
-    public boolean isHidden() {
-        return table != null && table.isHidden();
     }
 
     /**

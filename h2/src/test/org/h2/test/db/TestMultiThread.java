@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -60,15 +60,14 @@ public class TestMultiThread extends TestDb implements Runnable {
     public void test() throws Exception {
         testConcurrentSchemaChange();
         testConcurrentLobAdd();
-        testConcurrentView();
         testConcurrentAlter();
-        testConcurrentAnalyze();
         testConcurrentInsertUpdateSelect();
         testViews();
         testConcurrentInsert();
         testConcurrentUpdate();
         testConcurrentUpdate2();
         testCheckConstraint();
+        testOptimizeReuseResults();
     }
 
     private void testConcurrentSchemaChange() throws Exception {
@@ -135,46 +134,6 @@ public class TestMultiThread extends TestDb implements Runnable {
         }
     }
 
-    private void testConcurrentView() throws Exception {
-        if (config.mvStore) {
-            return;
-        }
-        String db = getTestName();
-        deleteDb(db);
-        final String url = getURL(db, true);
-        final Random r = new Random();
-        try (Connection conn = getConnection(url)) {
-            Statement stat = conn.createStatement();
-            StringBuilder buff = new StringBuilder();
-            buff.append("create table test(id int");
-            final int len = 3;
-            for (int i = 0; i < len; i++) {
-                buff.append(", x" + i + " int");
-            }
-            buff.append(")");
-            stat.execute(buff.toString());
-            stat.execute("create view test_view as select * from test");
-            stat.execute("insert into test(id) select x from system_range(1, 2)");
-            Task t = new Task() {
-                @Override
-                public void call() throws Exception {
-                    Connection c2 = getConnection(url);
-                    while (!stop) {
-                        c2.prepareStatement("select * from test_view where x" +
-                                r.nextInt(len) + "=1");
-                    }
-                    c2.close();
-                }
-            };
-            t.execute();
-            for (int i = 0; i < 1000; i++) {
-                conn.prepareStatement("select * from test_view where x" +
-                        r.nextInt(len) + "=1");
-            }
-            t.get();
-        }
-    }
-
     private void testConcurrentAlter() throws Exception {
         deleteDb(getTestName());
         try (final Connection conn = getConnection(getTestName())) {
@@ -194,36 +153,6 @@ public class TestMultiThread extends TestDb implements Runnable {
                 stat.execute("alter table test drop column x");
             }
             t.get();
-        }
-    }
-
-    private void testConcurrentAnalyze() throws Exception {
-        if (config.mvStore) {
-            return;
-        }
-        deleteDb(getTestName());
-        final String url = getURL("concurrentAnalyze", true);
-        try (Connection conn = getConnection(url)) {
-            Statement stat = conn.createStatement();
-            stat.execute("create table test(id bigint primary key) " +
-                    "as select x from system_range(1, 1000)");
-            Task t = new Task() {
-                @Override
-                public void call() throws SQLException {
-                    try (Connection conn2 = getConnection(url)) {
-                        for (int i = 0; i < 1000; i++) {
-                            conn2.createStatement().execute("analyze");
-                        }
-                    }
-                }
-            };
-            t.execute();
-            Thread.yield();
-            for (int i = 0; i < 1000; i++) {
-                conn.createStatement().execute("analyze");
-            }
-            t.get();
-            stat.execute("drop table test");
         }
     }
 
@@ -261,7 +190,7 @@ public class TestMultiThread extends TestDb implements Runnable {
             Statement stmt = conn.createStatement();
             while (!parent.stop) {
                 stmt.execute("SELECT COUNT(*) FROM TEST");
-                stmt.execute("INSERT INTO TEST VALUES(NULL, 'Hi')");
+                stmt.execute("INSERT INTO TEST(NAME) VALUES('Hi')");
                 PreparedStatement prep = conn.prepareStatement(
                         "UPDATE TEST SET NAME='Hello' WHERE ID=?");
                 prep.setInt(1, random.nextInt(10000));
@@ -523,7 +452,7 @@ public class TestMultiThread extends TestDb implements Runnable {
 
     private void testCheckConstraint() throws Exception {
         deleteDb("checkConstraint");
-        try (Connection c = getConnection("checkConstraint")) {
+        try (Connection c = getConnection("checkConstraint;LOCK_TIMEOUT=10000")) {
             Statement s = c.createStatement();
             s.execute("CREATE TABLE TEST(ID INT PRIMARY KEY, A INT, B INT)");
             PreparedStatement ps = c.prepareStatement("INSERT INTO TEST VALUES (?, ?, ?)");
@@ -542,7 +471,7 @@ public class TestMultiThread extends TestDb implements Runnable {
                 threads[i] = new Thread() {
                     @Override
                     public void run() {
-                        try (Connection c = getConnection("checkConstraint")) {
+                        try (Connection c = getConnection("checkConstraint;LOCK_TIMEOUT=10000")) {
                             PreparedStatement ps = c.prepareStatement("UPDATE TEST SET A = ?, B = ? WHERE ID = ?");
                             Random r = new Random();
                             for (int i = 0; i < 1_000; i++) {
@@ -570,6 +499,48 @@ public class TestMultiThread extends TestDb implements Runnable {
             assertFalse(error.get());
         } finally {
             deleteDb("checkConstraint");
+        }
+    }
+
+    private void testOptimizeReuseResults() throws Exception {
+        deleteDb("testOptimizeReuseResults");
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Connection c1 = getConnection("testOptimizeReuseResults");
+                Connection c2 = getConnection("testOptimizeReuseResults")) {
+            try (Statement stat = c1.createStatement()) {
+                stat.execute("CREATE TABLE TEST(ID BIGINT PRIMARY KEY, DATA INT)");
+                stat.execute("INSERT INTO TEST VALUES (1, 0)");
+            }
+            PreparedStatement prepUpdate = c1.prepareStatement("UPDATE TEST SET DATA = ? WHERE ID = 1");
+            PreparedStatement prepSelect = c2.prepareStatement("SELECT DATA FROM TEST WHERE ID = 1");
+            loop: for (int i = 1; i <= 1_000; i++) {
+                int v = i;
+                executor.execute(() -> testOptimizeReuseResultsSet(c1, prepUpdate, v));
+                long n = System.nanoTime();
+                int count = 0;
+                while ((System.nanoTime() - n) < 2_000_000_000L) {
+                    try (ResultSet rs = prepSelect.executeQuery()) {
+                        assertTrue(rs.next());
+                        if (rs.getInt(1) == v) {
+                            continue loop;
+                        }
+                        count++;
+                    }
+                }
+                fail("Error on iteration " + v + " after " + count + " attempts");
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        deleteDb("testOptimizeReuseResults");
+    }
+
+    private void testOptimizeReuseResultsSet(Connection c, PreparedStatement prepUpdate, int value) {
+        try {
+            prepUpdate.setInt(1, value);
+            assertEquals(1, prepUpdate.executeUpdate());
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
         }
     }
 

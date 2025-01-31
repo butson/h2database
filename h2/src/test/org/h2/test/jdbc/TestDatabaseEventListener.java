@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -76,21 +76,6 @@ public class TestDatabaseEventListener extends TestDb {
             } catch (SQLException e) {
                 throw new RuntimeException(e);
             }
-        }
-
-        @Override
-        public void closingDatabase() {
-            // nothing to do
-        }
-
-        @Override
-        public void exceptionThrown(SQLException e, String sql) {
-            // nothing to do
-        }
-
-        @Override
-        public void setProgress(int state, String name, int x, int max) {
-            // nothing to do
         }
 
     }
@@ -244,22 +229,11 @@ public class TestDatabaseEventListener extends TestDb {
     /**
      * The database event listener for this test.
      */
-    public static final class MyDatabaseEventListener implements
-            DatabaseEventListener {
+    public static final class MyDatabaseEventListener implements DatabaseEventListener {
 
         @Override
         public void closingDatabase() {
             calledClosingDatabase = true;
-        }
-
-        @Override
-        public void exceptionThrown(SQLException e, String sql) {
-            // nothing to do
-        }
-
-        @Override
-        public void init(String url) {
-            // nothing to do
         }
 
         @Override
@@ -268,7 +242,7 @@ public class TestDatabaseEventListener extends TestDb {
         }
 
         @Override
-        public void setProgress(int state, String name, int x, int max) {
+        public void setProgress(int state, String name, long x, long max) {
             if (state == DatabaseEventListener.STATE_SCAN_FILE) {
                 calledScan = true;
             }

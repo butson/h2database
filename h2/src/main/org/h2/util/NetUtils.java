@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,7 +13,6 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
-import java.util.concurrent.TimeUnit;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.SysProperties;
@@ -41,6 +40,7 @@ public class NetUtils {
      * @param port the port
      * @param ssl if SSL should be used
      * @return the socket
+     * @throws IOException on failure
      */
     public static Socket createLoopbackSocket(int port, boolean ssl)
             throws IOException {
@@ -65,6 +65,7 @@ public class NetUtils {
      *            address)
      * @param ssl if SSL should be used
      * @return the socket
+     * @throws IOException on failure
      */
     public static Socket createSocket(String server, int defaultPort, boolean ssl) throws IOException {
         return createSocket(server, defaultPort, ssl, 0);
@@ -79,6 +80,7 @@ public class NetUtils {
      * @param ssl if SSL should be used
      * @param networkTimeout socket so timeout
      * @return the socket
+     * @throws IOException on failure
      */
     public static Socket createSocket(String server, int defaultPort,
             boolean ssl, int networkTimeout) throws IOException {
@@ -104,6 +106,7 @@ public class NetUtils {
      * @param port the port
      * @param ssl if SSL should be used
      * @return the socket
+     * @throws IOException on failure
      */
     public static Socket createSocket(InetAddress address, int port, boolean ssl)
         throws IOException {
@@ -117,6 +120,7 @@ public class NetUtils {
      * @param ssl if SSL should be used
      * @param networkTimeout socket so timeout
      * @return the socket
+     * @throws IOException on failure
      */
     public static Socket createSocket(InetAddress address, int port, boolean ssl, int networkTimeout)
             throws IOException {
@@ -132,8 +136,7 @@ public class NetUtils {
                         SysProperties.SOCKET_CONNECT_TIMEOUT);
                 return socket;
             } catch (IOException e) {
-                if (System.nanoTime() - start >=
-                        TimeUnit.MILLISECONDS.toNanos(SysProperties.SOCKET_CONNECT_TIMEOUT)) {
+                if (System.nanoTime() - start >= SysProperties.SOCKET_CONNECT_TIMEOUT * 1_000_000L) {
                     // either it was a connect timeout,
                     // or list of different exceptions
                     throw e;
@@ -155,12 +158,7 @@ public class NetUtils {
 
     /**
      * Create a server socket. The system property h2.bindAddress is used if
-     * set. If SSL is used and h2.enableAnonymousTLS is true, an attempt is
-     * made to modify the security property jdk.tls.legacyAlgorithms
-     * (in newer JVMs) to allow anonymous TLS.
-     * <p>
-     * This system change is effectively permanent for the lifetime of the JVM.
-     * @see CipherFactory#removeAnonFromLegacyAlgorithms()
+     * set.
      *
      * @param port the port to listen on
      * @param ssl if SSL should be used
@@ -217,6 +215,7 @@ public class NetUtils {
      *
      * @param socket the socket
      * @return true if it is
+     * @throws UnknownHostException on failure
      */
     public static boolean isLocalAddress(Socket socket)
             throws UnknownHostException {
@@ -260,10 +259,8 @@ public class NetUtils {
      */
     public static synchronized String getLocalAddress() {
         long now = System.nanoTime();
-        if (cachedLocalAddress != null) {
-            if (cachedLocalAddressTime + TimeUnit.MILLISECONDS.toNanos(CACHE_MILLIS) > now) {
-                return cachedLocalAddress;
-            }
+        if (cachedLocalAddress != null && now - cachedLocalAddressTime < CACHE_MILLIS * 1_000_000L) {
+            return cachedLocalAddress;
         }
         InetAddress bind = null;
         boolean useLocalhost = false;
@@ -343,7 +340,7 @@ public class NetUtils {
                     .append(address[0] & 0xff).append('.') //
                     .append(address[1] & 0xff).append('.') //
                     .append(address[2] & 0xff).append('.') //
-                    .append(address[3] & 0xff).toString();
+                    .append(address[3] & 0xff);
             break;
         case 16:
             short[] a = new short[8];

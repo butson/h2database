@@ -1,17 +1,17 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.test.unit;
 
+import java.nio.ByteBuffer;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 import org.h2.mvstore.WriteBuffer;
 import org.h2.mvstore.type.BasicDataType;
 import org.h2.test.TestBase;
 import org.h2.util.MemoryEstimator;
-import java.nio.ByteBuffer;
-import java.util.Random;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Class TestMemoryEstimator.

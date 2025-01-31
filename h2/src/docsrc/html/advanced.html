@@ -1,6 +1,6 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <!--
-Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 and the EPL 1.0 (https://h2database.com/html/license.html).
 Initial Developer: H2 Group
 -->
@@ -49,8 +49,6 @@ Advanced
     Run as Windows Service</a><br />
 <a href="#odbc_driver">
     ODBC Driver</a><br />
-<a href="#microsoft_dot_net">
-    Using H2 in Microsoft .NET</a><br />
 <a href="#acid">
     ACID</a><br />
 <a href="#durability_problems">
@@ -148,18 +146,6 @@ than reading from separate files, but slows down the performance of operations
 that don't involve this column.
 </p>
 
-<h3>Large Object Compression</h3>
-<p>
-The following feature is only available for the PageStore storage engine.
-For the MVStore engine (the default for H2 version 1.4.x),
-append <code>;COMPRESS=TRUE</code> to the database URL instead.
-CLOB and BLOB values can be compressed by using
-<a href="commands.html#set_compress_lob" class="notranslate" >SET COMPRESS_LOB</a>.
-The LZF algorithm is faster but needs more disk space. By default compression is disabled, which usually speeds up write
-operations. If you store many large compressible values such as XML, HTML, text, and uncompressed binary files,
-then compressing can save a lot of disk space (sometimes more than 50%), and read operations may even be faster.
-</p>
-
 <h2 id="linked_tables">Linked Tables</h2>
 <p>
 This database supports linked tables, which means tables that don't exist in the current database but
@@ -228,7 +214,7 @@ See the <a href="commands.html">Commands</a> for details.
 Transaction isolation is provided for all data manipulation language (DML) statements.
 </p>
 <p>
-The default MVStore engine supports read uncommitted, read committed, repeatable read, snapshot,
+H2 supports read uncommitted, read committed, repeatable read, snapshot,
 and serializable (partially, see below) isolation levels:
 </p>
 <ul>
@@ -263,30 +249,6 @@ and serializable (partially, see below) isolation levels:
     <code>SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE</code>
 </li>
 </ul>
-<p>
-The PageStore engine supports read uncommitted, read committed, and serializable isolation levels:
-</p>
-<ul>
-<li><b>Read uncommitted</b><br />
-    This level means that transaction isolation is disabled.
-    This level is not supported by PageStore engine if multi-threaded mode is enabled.
-    To enable, execute the SQL statement
-    <code>SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ UNCOMMITTED</code>
-</li>
-<li><b>Read committed</b><br />
-    This is the default level.
-    Read locks are released immediately after executing the statement, but write locks are kept until the transaction commits.
-    To enable, execute the SQL statement
-    <code>SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED</code>
-</li>
-<li><b>Serializable</b><br />
-    Both read locks and write locks are kept until the transaction commits.
-    To enable, execute the SQL statement
-    <code>SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE</code>
-</li>
-</ul>
-<p>If repeatable read isolation level is requested when using a PageStore engine it is replaced
-with serializable isolation level.</p>
 <ul>
 <li><b>Dirty reads</b><br />
     Means a connection can read uncommitted changes made by another connection.<br />
@@ -305,29 +267,13 @@ with serializable isolation level.</p>
 
 <h3 id="mvcc">Multi-Version Concurrency Control (MVCC)</h3>
 <p>
-With default MVStore engine delete, insert and update operations only issue a shared lock on the table.
+Insert and update operations only issue a shared lock on the table.
 An exclusive lock is still used when adding or removing columns or when dropping the table.
 Connections only 'see' committed data, and own changes. That means, if connection A updates
 a row but doesn't commit this change yet, connection B will see the old value.
 Only when the change is committed, the new value is visible by other connections
 (read committed). If multiple connections concurrently try to lock or update the same row, the
 database waits until it can apply the change, but at most until the lock timeout expires.
-</p>
-
-<h3>Table Level Locking (PageStore engine)</h3>
-<p>
-With PageStore engine to make sure all connections only see consistent data, table level locking is used.
-This mechanism does not allow high concurrency, but is very fast.
-Shared locks and exclusive locks are supported.
-Before reading from a table, the database tries to add a shared lock to the table
-(this is only possible if there is no exclusive lock on the object by another connection).
-If the shared lock is added successfully, the table can be read. It is allowed that
-other connections also have a shared lock on the same object. If a connection wants
-to write to a table (update or delete a row), an exclusive lock is required. To get the
-exclusive lock, other connection must not have any locks on the object. After the
-connection commits, all locks are released.
-This database keeps all locks in memory.
-When a lock is released, and multiple connections are waiting for it, one of them is picked at random.
 </p>
 
 <h3>Lock Timeout</h3>
@@ -415,7 +361,7 @@ and re-run the <code>CreateCluster</code> tool.
 To find out which cluster nodes are currently running, execute the following SQL statement:
 </p>
 <pre>
-SELECT VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE NAME='CLUSTER'
+SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'CLUSTER'
 </pre>
 <p>
 If the result is <code>''</code> (two single quotes), then the cluster mode is disabled. Otherwise, the list of
@@ -447,7 +393,7 @@ MEMORY_FREE(), MEMORY_USED(), CSVREAD(), CSVWRITE(), RAND()</code> [when not usi
 Those functions should not be used directly in modifying statements
 (for example <code>INSERT, UPDATE, MERGE</code>). However, they can be used
 in read-only statements and the result can then be used for modifying statements.
-Using auto-increment and identity columns is currently not supported.
+Identity columns aren't supported.
 Instead, sequence values need to be manually requested and then used to insert data (using two statements).
 </p>
 <p>
@@ -507,14 +453,17 @@ The following tokens are keywords in H2:
 <table class="main">
 <thead>
 <tr>
-<th>Keyword</th>
-<th>H2</th>
-<th>SQL:&#8203;2016</th>
-<th>SQL:&#8203;2011</th>
-<th>SQL:&#8203;2008</th>
-<th>SQL:&#8203;2003</th>
-<th>SQL:&#8203;1999</th>
-<th>SQL-92</th>
+<th rowspan="2">Keyword</th>
+<th rowspan="2">H2</th>
+<th colspan="6" style="text-align: center">SQL Standard</th>
+</tr>
+<tr>
+<th>2016</th>
+<th>2011</th>
+<th>2008</th>
+<th>2003</th>
+<th>1999</th>
+<th>92</th>
 </tr>
 </thead>
 <tbody>
@@ -522,9 +471,15 @@ The following tokens are keywords in H2:
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>AND</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>ANY</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>ARRAY</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td></tr>
 <tr><td>AS</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>ASYMMETRIC</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>NR</td><td></td></tr>
+<tr><td>AUTHORIZATION</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>BETWEEN</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>NR</td><td>+</td></tr>
@@ -544,6 +499,10 @@ The following tokens are keywords in H2:
 <td>+</td><td>+</td><td>+</td><td>+</td><td></td><td></td><td></td></tr>
 <tr><td>CURRENT_DATE</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>CURRENT_PATH</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td></tr>
+<tr><td>CURRENT_ROLE</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td></tr>
 <tr><td>CURRENT_SCHEMA</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td></td><td></td><td></td></tr>
 <tr><td>CURRENT_TIME</td>
@@ -553,6 +512,8 @@ The following tokens are keywords in H2:
 <tr><td>CURRENT_USER</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>DAY</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>DEFAULT</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>DISTINCT</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
@@ -568,8 +529,6 @@ The following tokens are keywords in H2:
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>FETCH</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
-<tr><td>FILTER</td>
-<td>CS</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td><td></td></tr>
 <tr><td>FOR</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>FOREIGN</td>
@@ -596,8 +555,6 @@ The following tokens are keywords in H2:
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>INTERSECT</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
-<tr><td>INTERSECTS</td>
-<td>+</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>INTERVAL</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>IS</td>
@@ -613,13 +570,13 @@ The following tokens are keywords in H2:
 <tr><td>LIKE</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>LIMIT</td>
-<td>+</td><td></td><td></td><td></td><td></td><td>+</td><td></td></tr>
+<td>MS</td><td></td><td></td><td></td><td></td><td>+</td><td></td></tr>
 <tr><td>LOCALTIME</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td></tr>
 <tr><td>LOCALTIMESTAMP</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td></tr>
 <tr><td>MINUS</td>
-<td>+</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<td>MS</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>MINUTE</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>MONTH</td>
@@ -662,31 +619,35 @@ The following tokens are keywords in H2:
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>SELECT</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>SESSION_USER</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td></tr>
 <tr><td>SET</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
-<tr><td>SYSDATE</td>
-<td>CS</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>SYSTIME</td>
-<td>CS</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
-<tr><td>SYSTIMESTAMP</td>
-<td>CS</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td>SOME</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>SYMMETRIC</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>NR</td><td></td></tr>
+<tr><td>SYSTEM_USER</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>TABLE</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>TO</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
-<tr><td>TODAY</td>
-<td>CS</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>TOP</td>
-<td>CS</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+<td>MS<br/>CS</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
 <tr><td>TRAILING</td>
 <td>CS</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>TRUE</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>UESCAPE</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td></td><td></td></tr>
 <tr><td>UNION</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>UNIQUE</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>UNKNOWN</td>
+<td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
+<tr><td>USER</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
 <tr><td>USING</td>
 <td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td><td>+</td></tr>
@@ -709,15 +670,30 @@ The following tokens are keywords in H2:
 </tbody>
 </table>
 <p>
-Some keywords in H2 are context-sensitive (CS), such keywords may be used as identifiers in some places,
+Mode-sensitive keywords (MS) are keywords only in some compatibility modes.
+</p>
+<ul><li>LIMIT is a keywords only in Regular, Legacy, DB2, HSQLDB, MariaDB, MySQL, and PostgreSQL compatibility modes.
+It is an identifier in Strict, Derby, MSSQLServer, and Oracle compatibility modes.
+</li><li>MINUS is a keyword only in Regular, Legacy, DB2, HSQLDB, and Oracle compatibility modes.
+It is an identifier in Strict, Derby, MSSQLServer, MariaDB, MySQL, and PostgreSQL compatibility modes.
+</li><li>TOP is a context-sensitive keyword (can be either keyword or identifier)
+only in Regular, Legacy, HSQLDB, and MSSQLServer compatibility modes.
+It is an identifier unconditionally in Strict, Derby, DB2, MariaDB, MySQL, Oracle, and PostgreSQL compatibility modes.
+</li></ul>
+<p>
+Context-sensitive keywords (CS) can be used as identifiers in some places,
 but cannot be used as identifiers in others.
+Normal keywords (+) are always treated as keywords.
+</p>
+<p>
 Most keywords in H2 are also reserved (+) or non-reserved (NR) words in the SQL Standard.
 Newer versions of H2 may have more keywords than older ones.
+Reserved words from the SQL Standard are potential candidates for keywords in future versions.
 </p>
 
 <p>There is a compatibility setting
 <a href="commands.html#set_non_keywords"><code>SET NON_KEYWORDS</code></a>
-that can be used as a temporary workaround for applications that use keywords as unquoted identifiers.</p>.
+that can be used as a temporary workaround for applications that use keywords as unquoted identifiers.</p>
 
 <h2 id="standards_compliance">Standards Compliance</h2>
 <p>
@@ -925,55 +901,6 @@ When using Microsoft Access to edit data in a linked H2 table, you may need to e
 Tools - Options - Edit/Find - ODBC fields.
 </p>
 
-<h2 id="microsoft_dot_net">Using H2 in Microsoft .NET</h2>
-<p>
-The database can be used from Microsoft .NET even without using Java, by using IKVM.NET.
-You can access a H2 database on .NET using the JDBC API, or using the ADO.NET interface.
-</p>
-
-<h3>Using the ADO.NET API on .NET</h3>
-<p>
-An implementation of the ADO.NET interface is available in the open source project
-<a href="https://code.google.com/archive/p/h2sharp/">H2Sharp</a>.
-</p>
-
-<h3>Using the JDBC API on .NET</h3>
-<ul><li>Install the .NET Framework from <a href="https://www.microsoft.com">Microsoft</a>.
-    Mono has not yet been tested.
-</li><li>Install <a href="https://www.ikvm.net">IKVM.NET</a>.
-</li><li>Copy the <code>h2*.jar</code> file to <code>ikvm/bin</code>
-</li><li>Run the H2 Console using:
-    <code>ikvm -jar h2*.jar</code>
-</li><li>Convert the H2 Console to an <code>.exe</code> file using:
-    <code>ikvmc -target:winexe h2*.jar</code>.
-    You may ignore the warnings.
-</li><li>Create a <code>.dll</code> file using (change the version accordingly):
-    <code>ikvmc.exe -target:library -version:1.0.69.0 h2*.jar</code>
-</li></ul>
-<p>
-If you want your C# application use H2, you need to add the <code>h2.dll</code> and the
-<code>IKVM.OpenJDK.ClassLibrary.dll</code> to your C# solution. Here some sample code:
-</p>
-<pre>
-using System;
-using java.sql;
-
-class Test
-{
-    static public void Main()
-    {
-        org.h2.Driver.load();
-        Connection conn = DriverManager.getConnection("jdbc:h2:~/test", "sa", "sa");
-        Statement stat = conn.createStatement();
-        ResultSet rs = stat.executeQuery("SELECT 'Hello World'");
-        while (rs.next())
-        {
-            Console.WriteLine(rs.getString(1));
-        }
-    }
-}
-</pre>
-
 <h2 id="acid">ACID</h2>
 <p>
 In the database world, ACID stands for:
@@ -1112,7 +1039,8 @@ java -cp h2*.jar org.h2.tools.Recover
 For each database in the current directory, a text file will be created.
 This file contains raw insert statements (for the data) and data definition (DDL) statements to recreate
 the schema of the database. This file can be executed using the <code>RunScript</code> tool or a
-<code>RUNSCRIPT FROM</code> SQL statement. The script includes at least one
+<a href="https://h2database.com/html/commands.html#runscript"><code>RUNSCRIPT</code></a> SQL statement.
+The script includes at least one
 <code>CREATE USER</code> statement. If you run the script against a database that was created with the same
 user, or if there are conflicting users, running the script will fail. Consider running the script
 against a database that was created with a user name that is not in the script.
@@ -1440,9 +1368,10 @@ Ensure the existing accessible databases are protected using strong passwords.
 <p>
 If you enable remote access using <code>-webAllowOthers</code>,
 please ensure the web server can only be accessed from trusted networks.
+If this option is specified, <code>-webExternalNames</code> should be also specified with
+comma-separated list of external names or addresses of this server.
 The options <code>-baseDir</code> don't protect
-access to the tools section, prevent remote shutdown of the web server,
-changes to the preferences, the saved connection settings,
+access to the saved connection settings,
 or access to other databases accessible from the system.
 </p>
 
@@ -1583,7 +1512,7 @@ custom certificates are supported as well.
 <h2 id="tls_connections">TLS Connections</h2>
 <p>
 Remote TLS connections are supported using the Java Secure Socket Extension
-(<code>SSLServerSocket, SSLSocket</code>). By default, anonymous TLS is enabled.
+(<code>SSLServerSocket, SSLSocket</code>).
 </p>
 <p>
 To use your own keystore, set the system properties <code>javax.net.ssl.keyStore</code> and
@@ -1592,20 +1521,21 @@ See also <a href="https://docs.oracle.com/javase/7/docs/technotes/guides/securit
 Customizing the Default Key and Trust Stores, Store Types, and Store Passwords</a>
 for more information.
 </p>
-<p>
-To disable anonymous TLS, set the system property <code>h2.enableAnonymousTLS</code> to false.
-</p>
 
 <h2 id="uuid">Universally Unique Identifiers (UUID)</h2>
 <p>
 This database supports UUIDs. Also supported is a function to create new UUIDs using
 a cryptographically strong pseudo random number generator.
+</p>
+<p>
 With random UUIDs, the chance of two having the same value can be calculated
 using the probability theory. See also 'Birthday Paradox'.
-Standardized randomly generated UUIDs have 122 random bits.
+</p>
+<p>
+RFC 9562-compliant randomly generated UUIDs with version 4 have 122 random bits.
 4 bits are used for the version (Randomly generated UUID), and 2 bits for the variant (Leach-Salz).
-This database supports generating such UUIDs using the built-in function
-<code>RANDOM_UUID()</code> or <code>UUID()</code>.
+This database supports generating such UUIDs using the built-in function <code>RANDOM_UUID(4)</code>.
+Please note that indexes on UUIDs with this version may have a poor performance.
 Here is a small program to estimate the probability of having two identical UUIDs
 after generating a number of values:
 </p>
@@ -1638,13 +1568,27 @@ one's annual risk of being hit by a meteorite is estimated to be one chance in 1
 that means the probability is about 0.000'000'000'06.
 </p>
 
+<p>
+RFC 9562-compliant time-ordered UUIDs with version 7 have layout optimized for database systems.
+They contain 48-bit number of milliseconds seconds since midnight 1 Jan 1970 UTC with leap seconds excluded
+and additional 12-bit sub-millisecond timestamp fraction plus 62 random bits or 74 random bits without this fraction
+depending on implementation.
+</p>
+<p>
+This database supports generating such UUIDs using the built-in function <code>RANDOM_UUID(7)</code>.
+This function produces 12-bit sub-millisecond timestamp fraction if high resolution timestamps are available in JVM
+and 62 pseudo random bits.
+</p>
+
 <h2 id="spatial_features">Spatial Features</h2>
 <p>
 H2 supports the geometry data type and spatial indexes.
 Here is an example SQL script to create a table with a spatial column and index:
 </p>
 <pre>
-CREATE TABLE GEO_TABLE(GID SERIAL, THE_GEOM GEOMETRY);
+CREATE TABLE GEO_TABLE(
+    GID BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    THE_GEOM GEOMETRY);
 INSERT INTO GEO_TABLE(THE_GEOM) VALUES
     ('POINT(500 505)'),
     ('LINESTRING(550 551, 525 512, 565 566)'),
@@ -1670,14 +1614,13 @@ EXPLAIN SELECT * FROM GEO_TABLE
     'POLYGON ((490 490, 536 490, 536 515, 490 515, 490 490))';
 -- Result
 SELECT
-    "GEO_TABLE"."GID",
-    "GEO_TABLE"."THE_GEOM"
+    "PUBLIC"."GEO_TABLE"."GID",
+    "PUBLIC"."GEO_TABLE"."THE_GEOM"
 FROM "PUBLIC"."GEO_TABLE"
-    /* PUBLIC.GEO_TABLE_SPATIAL_INDEX:
-    THE_GEOM &amp;&amp;
-    'POLYGON ((490 490, 536 490, 536 515, 490 515, 490 490))'::Geometry */
-WHERE INTERSECTS("THE_GEOM",
-    'POLYGON ((490 490, 536 490, 536 515, 490 515, 490 490))'::Geometry)
+    /* PUBLIC.GEO_TABLE_SPATIAL_INDEX: THE_GEOM &amp;&amp;
+    GEOMETRY 'POLYGON ((490 490, 536 490, 536 515, 490 515, 490 490))' */
+WHERE "THE_GEOM" &amp;&amp;
+    GEOMETRY 'POLYGON ((490 490, 536 490, 536 515, 490 515, 490 490))'
 </pre>
 <p>
 For persistent databases, the spatial index is stored on disk;
@@ -1877,28 +1820,29 @@ This database has the following known limitations:
     An example database URL is: <code>jdbc:h2:split:~/test</code>.
 </li><li>The maximum number of rows per table is 2^64.
 </li><li>The maximum number of open transactions is 65535.
+</li><li>The maximum number of columns in a table or expressions in a SELECT statement is 16384.
+The actual possible number can be smaller if their definitions are too long.
+</li><li>The maximum length of an identifier (table name, column name, and so on) is 256 characters.
+</li><li>The maximum length of CHARACTER, CHARACTER VARYING and VARCHAR_IGNORECASE values and columns
+is 1_000_000_000 characters.
+</li><li>The maximum length of BINARY, BINARY VARYING, JAVA_OBJECT, GEOMETRY, and JSON values and columns
+is 1_000_000_000 bytes.
+</li><li>The maximum precision of NUMERIC and DECFLOAT values and columns is 100000.
+</li><li>The maximum length of an ENUM value is 1048576 characters, the maximum number of ENUM values is 65536.
+</li><li>The maximum cardinality of an ARRAY value or column is 65536.
+</li><li>The maximum degree of a ROW value or column is 16384.
+</li><li>The maximum index of parameter is 100000.
 </li><li>Main memory requirements: The larger the database, the more main memory is required.
-    With the current storage mechanism (the page store),
-    the minimum main memory required is around 1 MB for each 8 GB database file size.
 </li><li>Limit on the complexity of SQL statements.
-Statements of the following form will result in a stack overflow exception:
-<pre>
-SELECT * FROM DUAL WHERE X = 1
-OR X = 2 OR X = 2 OR X = 2 OR X = 2 OR X = 2
--- repeat previous line 500 times --
-</pre>
+Very complex expressions may result in a stack overflow exception.
 </li><li>There is no limit for the following entities, except the memory and storage capacity:
-    maximum identifier length (table name, column name, and so on);
-    maximum number of tables, columns, indexes, triggers, and other database objects;
-    maximum statement length, number of parameters per statement, tables per statement, expressions
-    in order by, group by, having, and so on;
+    maximum number of tables, indexes, triggers, and other database objects;
+    maximum statement length, tables per statement;
     maximum rows per query;
-    maximum columns per table, columns per index, indexes per table, lob columns per table, and so on;
-    maximum row length, index row length, select row length;
-    maximum length of a varchar column, decimal column, literal in a statement.
+    maximum indexes per table, lob columns per table, and so on;
+    maximum row length, index row length, select row length.
 </li><li>Querying from the metadata tables is slow if there are many tables (thousands).
-</li><li>For limitations on data types, see the documentation of the respective Java data type
-    or the data type documentation of this database.
+</li><li>For other limitations on data types, see the data type documentation of this database.
 </li></ul>
 
 <h2 id="glossary_links">Glossary and Links</h2>

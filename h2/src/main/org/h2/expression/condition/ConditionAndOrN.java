@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0, and the
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0, and the
  * EPL 1.0 (https://h2database.com/html/license.html). Initial Developer: H2
  * Group
  */
@@ -10,7 +10,8 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
-import org.h2.engine.Session;
+
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionVisitor;
 import org.h2.message.DbException;
@@ -65,10 +66,14 @@ public class ConditionAndOrN extends Condition {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        builder.append('(');
+    public boolean needParentheses() {
+        return true;
+    }
+
+    @Override
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
         Iterator<Expression> it = expressions.iterator();
-        it.next().getSQL(builder, sqlFlags);
+        it.next().getSQL(builder, sqlFlags, AUTO_PARENTHESES);
         while (it.hasNext()) {
             switch (andOrType) {
             case ConditionAndOr.AND:
@@ -78,16 +83,15 @@ public class ConditionAndOrN extends Condition {
                 builder.append("\n    OR ");
                 break;
             default:
-                throw DbException.throwInternalError("andOrType=" + andOrType);
+                throw DbException.getInternalError("andOrType=" + andOrType);
             }
-            it.next().getSQL(builder, sqlFlags);
+            it.next().getSQL(builder, sqlFlags, AUTO_PARENTHESES);
         }
-        builder.append(')');
         return builder;
     }
 
     @Override
-    public void createIndexConditions(Session session, TableFilter filter) {
+    public void createIndexConditions(SessionLocal session, TableFilter filter) {
         if (andOrType == ConditionAndOr.AND) {
             for (Expression e : expressions) {
                 e.createIndexConditions(session, filter);
@@ -101,7 +105,7 @@ public class ConditionAndOrN extends Condition {
     }
 
     @Override
-    public Expression getNotIfPossible(Session session) {
+    public Expression getNotIfPossible(SessionLocal session) {
         // (NOT (A OR B)): (NOT(A) AND NOT(B))
         // (NOT (A AND B)): (NOT(A) OR NOT(B))
         final ArrayList<Expression> newList = new ArrayList<>(expressions.size());
@@ -117,7 +121,7 @@ public class ConditionAndOrN extends Condition {
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         boolean hasNull = false;
         switch (andOrType) {
         case ConditionAndOr.AND: {
@@ -143,11 +147,11 @@ public class ConditionAndOrN extends Condition {
             return hasNull ? ValueNull.INSTANCE : ValueBoolean.FALSE;
         }
         default:
-            throw DbException.throwInternalError("type=" + andOrType);
+            throw DbException.getInternalError("type=" + andOrType);
         }
     }
 
-    private static final Comparator<Expression> COMPARE_BY_COST = new Comparator<Expression>() {
+    private static final Comparator<Expression> COMPARE_BY_COST = new Comparator<>() {
         @Override
         public int compare(Expression lhs, Expression rhs) {
             return lhs.getCost() - rhs.getCost();
@@ -156,7 +160,7 @@ public class ConditionAndOrN extends Condition {
     };
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         // NULL handling: see wikipedia,
         // http://www-cs-students.stanford.edu/~wlam/compsci/sqlnulls
 
@@ -206,10 +210,10 @@ public class ConditionAndOrN extends Condition {
                 Expression reduced;
                 if (left instanceof Comparison && right instanceof Comparison) {
                     reduced = ((Comparison) left).optimizeOr(session, (Comparison) right);
-                } else if (left instanceof ConditionIn && right instanceof Comparison) {
-                    reduced = ((ConditionIn) left).getAdditional((Comparison) right);
-                } else if (right instanceof ConditionIn && left instanceof Comparison) {
-                    reduced = ((ConditionIn) right).getAdditional((Comparison) left);
+                } else if (left instanceof ConditionInList && right instanceof Comparison) {
+                    reduced = ((ConditionInList) left).getAdditional((Comparison) right);
+                } else if (right instanceof ConditionInList && left instanceof Comparison) {
+                    reduced = ((ConditionInList) right).getAdditional((Comparison) left);
                 } else if (left instanceof ConditionInConstantSet && right instanceof Comparison) {
                     reduced = ((ConditionInConstantSet) left).getAdditional(session, (Comparison) right);
                 } else if (right instanceof ConditionInConstantSet && left instanceof Comparison) {
@@ -223,7 +227,7 @@ public class ConditionAndOrN extends Condition {
                 }
                 if (reduced != null) {
                     expressions.remove(i);
-                    expressions.set(i-1, reduced);
+                    expressions.set(i - 1, reduced.optimize(session));
                     continue; // because we don't want to increment, we want to compare the new pair exposed
                 }
             }
@@ -300,7 +304,7 @@ public class ConditionAndOrN extends Condition {
     }
 
     @Override
-    public void updateAggregate(Session session, int stage) {
+    public void updateAggregate(SessionLocal session, int stage) {
         for (Expression e : expressions) {
             e.updateAggregate(session, stage);
         }

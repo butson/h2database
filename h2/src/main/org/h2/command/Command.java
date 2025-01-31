@@ -1,35 +1,41 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.command;
 
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import org.h2.api.ErrorCode;
 import org.h2.engine.Constants;
 import org.h2.engine.Database;
 import org.h2.engine.DbObject;
+import org.h2.engine.Mode.CharPadding;
 import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.ParameterInterface;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
+import org.h2.result.BatchResult;
+import org.h2.result.MergedResult;
 import org.h2.result.ResultInterface;
 import org.h2.result.ResultWithGeneratedKeys;
 import org.h2.result.ResultWithPaddedStrings;
-import org.h2.util.MathUtils;
+import org.h2.util.Utils;
+import org.h2.value.Value;
 
 /**
  * Represents a SQL statement. This object is only used on the server side.
  */
 public abstract class Command implements CommandInterface {
+
     /**
      * The session.
      */
-    protected final Session session;
+    protected final SessionLocal session;
 
     /**
      * The last start time.
@@ -50,10 +56,10 @@ public abstract class Command implements CommandInterface {
 
     private boolean canReuse;
 
-    Command(Session session, String sql) {
+    Command(SessionLocal session, String sql) {
         this.session = session;
         this.sql = sql;
-        trace = session.getDatabase().getTrace(Trace.COMMAND);
+        trace = getDatabase().getTrace(Trace.COMMAND);
     }
 
     /**
@@ -116,7 +122,7 @@ public abstract class Command implements CommandInterface {
      * @return the local result set
      * @throws DbException if the command is not a query
      */
-    public abstract ResultInterface query(int maxrows);
+    public abstract ResultInterface query(long maxrows);
 
     @Override
     public final ResultInterface getMetaData() {
@@ -127,13 +133,13 @@ public abstract class Command implements CommandInterface {
      * Start the stopwatch.
      */
     void start() {
-        if (trace.isInfoEnabled() || session.getDatabase().getQueryStatistics()) {
-            startTimeNanos = System.nanoTime();
+        if (trace.isInfoEnabled() || getDatabase().getQueryStatistics()) {
+            startTimeNanos = Utils.currentNanoTime();
         }
     }
 
-    void setProgress(int state) {
-        session.getDatabase().setProgress(state, sql, 0, 0);
+    void setProgress(Database database, int state) {
+        database.setProgress(state, sql, 0, 0);
     }
 
     /**
@@ -149,14 +155,15 @@ public abstract class Command implements CommandInterface {
     }
 
     @Override
-    public void stop() {
-        if (!isTransactional()) {
-            session.commit(true);
-        } else if (session.getAutoCommit()) {
-            session.commit(false);
+    public void stop(boolean commitIfAutoCommit) {
+        if (session.isOpen()) {
+            commitIfNonTransactional();
+            if (commitIfAutoCommit && isTransactional() && session.getAutoCommit()) {
+                session.commit(false);
+            }
         }
-        if (trace.isInfoEnabled() && startTimeNanos > 0) {
-            long timeMillis = (System.nanoTime() - startTimeNanos) / 1000 / 1000;
+        if (trace.isInfoEnabled() && startTimeNanos != 0L) {
+            long timeMillis = (System.nanoTime() - startTimeNanos) / 1_000_000L;
             if (timeMillis > Constants.SLOW_QUERY_LIMIT_MS) {
                 trace.info("slow query: {0} ms", timeMillis);
             }
@@ -165,36 +172,36 @@ public abstract class Command implements CommandInterface {
 
     /**
      * Execute a query and return the result.
-     * This method prepares everything and calls {@link #query(int)} finally.
+     * This method prepares everything and calls {@link #query(long)} finally.
      *
      * @param maxrows the maximum number of rows to return
      * @param scrollable if the result set must be scrollable (ignored)
      * @return the result set
      */
     @Override
-    public ResultInterface executeQuery(int maxrows, boolean scrollable) {
-        startTimeNanos = 0;
-        long start = 0;
-        Database database = session.getDatabase();
-        Object sync = database.isMVStore() ? session : database;
+    public ResultInterface executeQuery(long maxrows, boolean scrollable) {
+        startTimeNanos = 0L;
+        long start = 0L;
+        Database database = getDatabase();
         session.waitIfExclusiveModeEnabled();
         boolean callStop = true;
-        //noinspection SynchronizationOnLocalVariableOrMethodParameter
-        synchronized (sync) {
+        session.lock();
+        try {
             session.startStatementWithinTransaction(this);
+            Session oldSession = session.setThreadLocalSession();
             try {
                 while (true) {
                     database.checkPowerOff();
                     try {
                         ResultInterface result = query(maxrows);
                         callStop = !result.isLazy();
-                        if (database.getMode().padFixedLengthStrings) {
+                        if (database.getMode().charPadding == CharPadding.IN_RESULT_SETS) {
                             return ResultWithPaddedStrings.get(result);
                         }
                         return result;
                     } catch (DbException e) {
-                        // cannot retry DDL
-                        if (isCurrentCommandADefineCommand()) {
+                        // cannot retry some commands
+                        if (!isRetryable()) {
                             throw e;
                         }
                         start = filterConcurrentUpdate(e, start);
@@ -222,79 +229,137 @@ public abstract class Command implements CommandInterface {
                 database.checkPowerOff();
                 throw e;
             } finally {
+                session.resetThreadLocalSession(oldSession);
                 session.endStatement();
                 if (callStop) {
-                    stop();
+                    stop(true);
                 }
             }
+        } finally {
+            session.unlock();
         }
     }
 
     @Override
     public ResultWithGeneratedKeys executeUpdate(Object generatedKeysRequest) {
-        long start = 0;
-        Database database = session.getDatabase();
-        Object sync = database.isMVStore() ? session : database;
-        session.waitIfExclusiveModeEnabled();
-        boolean callStop = true;
-        //noinspection SynchronizationOnLocalVariableOrMethodParameter
-        synchronized (sync) {
-            Session.Savepoint rollback = session.setSavepoint();
-            session.startStatementWithinTransaction(this);
-            DbException ex = null;
-            try {
-                while (true) {
-                    database.checkPowerOff();
-                    try {
-                        return update(generatedKeysRequest);
-                    } catch (DbException e) {
-                        // cannot retry DDL
-                        if (isCurrentCommandADefineCommand()) {
-                            throw e;
-                        }
-                        start = filterConcurrentUpdate(e, start);
-                    } catch (OutOfMemoryError e) {
-                        callStop = false;
-                        database.shutdownImmediately();
-                        throw DbException.convert(e);
-                    } catch (Throwable e) {
-                        throw DbException.convert(e);
-                    }
+        session.lock();
+        try {
+            session.waitIfExclusiveModeEnabled();
+            return executeUpdate(generatedKeysRequest, true);
+        } finally {
+            session.unlock();
+        }
+    }
+
+    @Override
+    public BatchResult executeBatchUpdate(ArrayList<Value[]> batchParameters, Object generatedKeysRequest) {
+        session.lock();
+        try {
+            session.waitIfExclusiveModeEnabled();
+            int size = batchParameters.size();
+            long[] updateCounts = new long[size];
+            MergedResult generatedKeys = generatedKeysRequest != null ? new MergedResult() : null;
+            ArrayList<SQLException> exceptions = new ArrayList<>();
+            for (int i = 0; i < size; i++) {
+                Value[] set = batchParameters.get(i);
+                ArrayList<? extends ParameterInterface> parameters = getParameters();
+                for (int j = 0, l = set.length; j < l; j++) {
+                    parameters.get(j).setValue(set[j], true);
                 }
-            } catch (DbException e) {
-                e = e.addSQL(sql);
-                SQLException s = e.getSQLException();
-                database.exceptionThrown(s, sql);
-                if (s.getErrorCode() == ErrorCode.OUT_OF_MEMORY) {
+                long updateCount;
+                try {
+                    ResultWithGeneratedKeys result = executeUpdate(generatedKeysRequest, i + 1 == size);
+                    updateCount = result.getUpdateCount();
+                    if (generatedKeys != null) {
+                        ResultInterface keys = result.getGeneratedKeys();
+                        if (keys != null) {
+                            generatedKeys.add(keys);
+                        }
+                    }
+                } catch (Exception e) {
+                    exceptions.add(DbException.toSQLException(e));
+                    updateCount = Statement.EXECUTE_FAILED;
+                }
+                updateCounts[i] = updateCount;
+            }
+            return new BatchResult(updateCounts, generatedKeys != null ? generatedKeys.getResult() : null, exceptions);
+        } finally {
+            session.unlock();
+        }
+    }
+
+    private ResultWithGeneratedKeys executeUpdate(Object generatedKeysRequest, boolean commitIfAutoCommit) {
+        long start = 0;
+        boolean callStop = true;
+        Database database = getDatabase();
+        commitIfNonTransactional();
+        SessionLocal.Savepoint rollback = session.setSavepoint();
+        session.startStatementWithinTransaction(this);
+        DbException ex = null;
+        Session oldSession = session.setThreadLocalSession();
+        try {
+            while (true) {
+                database.checkPowerOff();
+                try {
+                    return update(generatedKeysRequest);
+                } catch (DbException e) {
+                    // cannot retry some commands
+                    if (!isRetryable()) {
+                        throw e;
+                    }
+                    start = filterConcurrentUpdate(e, start);
+                } catch (OutOfMemoryError e) {
                     callStop = false;
                     database.shutdownImmediately();
-                    throw e;
+                    throw DbException.convert(e);
+                } catch (Throwable e) {
+                    throw DbException.convert(e);
                 }
-                try {
-                    database.checkPowerOff();
-                    if (s.getErrorCode() == ErrorCode.DEADLOCK_1) {
-                        session.rollback();
-                    } else {
-                        session.rollbackTo(rollback);
-                    }
-                } catch (Throwable nested) {
-                    e.addSuppressed(nested);
-                }
-                ex = e;
+            }
+        } catch (DbException e) {
+            e = e.addSQL(sql);
+            SQLException s = e.getSQLException();
+            database.exceptionThrown(s, sql);
+            if (s.getErrorCode() == ErrorCode.OUT_OF_MEMORY) {
+                callStop = false;
+                database.shutdownImmediately();
                 throw e;
-            } finally {
-                try {
-                    session.endStatement();
-                    if (callStop) {
-                        stop();
-                    }
-                } catch (Throwable nested) {
-                    if (ex == null) {
-                        throw nested;
-                    } else {
-                        ex.addSuppressed(nested);
-                    }
+            }
+            try {
+                database.checkPowerOff();
+                if (s.getErrorCode() == ErrorCode.DEADLOCK_1) {
+                    session.rollback();
+                } else {
+                    session.rollbackTo(rollback);
                 }
+            } catch (Throwable nested) {
+                e.addSuppressed(nested);
+            }
+            ex = e;
+            throw e;
+        } finally {
+            session.resetThreadLocalSession(oldSession);
+            try {
+                session.endStatement();
+                if (callStop) {
+                    stop(commitIfAutoCommit);
+                }
+            } catch (Throwable nested) {
+                if (ex == null) {
+                    throw nested;
+                } else {
+                    ex.addSuppressed(nested);
+                }
+            }
+        }
+    }
+
+    private void commitIfNonTransactional() {
+        if (!isTransactional()) {
+            boolean autoCommit = session.getAutoCommit();
+            session.commit(true);
+            if (!autoCommit && session.getAutoCommit()) {
+                session.begin();
             }
         }
     }
@@ -305,29 +370,11 @@ public abstract class Command implements CommandInterface {
                 && errorCode != ErrorCode.ROW_NOT_FOUND_WHEN_DELETING_1) {
             throw e;
         }
-        long now = System.nanoTime();
-        if (start != 0 && TimeUnit.NANOSECONDS.toMillis(now - start) > session.getLockTimeout()) {
+        long now = Utils.currentNanoTime();
+        if (start != 0L && now - start > session.getLockTimeout() * 1_000_000L) {
             throw DbException.get(ErrorCode.LOCK_TIMEOUT_1, e);
         }
-        // Only in PageStore mode we need to sleep here to avoid busy wait loop
-        Database database = session.getDatabase();
-        if (!database.isMVStore()) {
-            int sleep = 1 + MathUtils.randomInt(10);
-            while (true) {
-                try {
-                    // although nobody going to notify us
-                    // it is vital to give up lock on a database
-                    database.wait(sleep);
-                } catch (InterruptedException e1) {
-                    // ignore
-                }
-                long slept = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - now);
-                if (slept >= sleep) {
-                    break;
-                }
-            }
-        }
-        return start == 0 ? now : start;
+        return start == 0L ? now : start;
     }
 
     @Override
@@ -337,7 +384,7 @@ public abstract class Command implements CommandInterface {
 
     @Override
     public void cancel() {
-        this.cancel = true;
+        cancel = true;
     }
 
     @Override
@@ -377,7 +424,13 @@ public abstract class Command implements CommandInterface {
     public abstract Set<DbObject> getDependencies();
 
     /**
-     * Is the command we just tried to execute a DefineCommand (i.e. DDL)
+     * Returns is this command can be repeated again on locking failure.
+     *
+     * @return is this command can be repeated again on locking failure
      */
-    protected abstract boolean isCurrentCommandADefineCommand();
+    protected abstract boolean isRetryable();
+
+    protected final Database getDatabase() {
+        return session.getDatabase();
+    }
 }

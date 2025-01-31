@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -27,13 +27,10 @@ public class MetaRecord implements Comparable<MetaRecord> {
      * constraints first.
      */
     static final Comparator<Prepared> CONSTRAINTS_COMPARATOR = (o1, o2) -> {
-        int t1 = o1.getType(), t2 = o2.getType();
-        boolean u1 = t1 == CommandInterface.ALTER_TABLE_ADD_CONSTRAINT_PRIMARY_KEY
-                || t1 == CommandInterface.ALTER_TABLE_ADD_CONSTRAINT_UNIQUE;
-        boolean u2 = t2 == CommandInterface.ALTER_TABLE_ADD_CONSTRAINT_PRIMARY_KEY
-                || t2 == CommandInterface.ALTER_TABLE_ADD_CONSTRAINT_UNIQUE;
+        boolean u1 = isPrimaryOrUniqueConstraint(o1);
+        boolean u2 = isPrimaryOrUniqueConstraint(o2);
         if (u1 == u2) {
-            return o1.getPersistedObjectId() - o2.getPersistedObjectId();
+            return Integer.compare(o1.getPersistedObjectId(), o2.getPersistedObjectId());
         }
         return u1 ? -1 : 1;
     };
@@ -54,7 +51,7 @@ public class MetaRecord implements Comparable<MetaRecord> {
         r.setValue(0, ValueInteger.get(obj.getId()));
         r.setValue(1, ValueInteger.get(0));
         r.setValue(2, ValueInteger.get(obj.getType()));
-        r.setValue(3, ValueVarchar.get(obj.getCreateSQL()));
+        r.setValue(3, ValueVarchar.get(obj.getCreateSQLForMeta()));
     }
 
     public MetaRecord(SearchRow r) {
@@ -70,7 +67,7 @@ public class MetaRecord implements Comparable<MetaRecord> {
      * @param systemSession the system session
      * @param listener the database event listener
      */
-    void prepareAndExecute(Database db, Session systemSession, DatabaseEventListener listener) {
+    void prepareAndExecute(Database db, SessionLocal systemSession, DatabaseEventListener listener) {
         try {
             Prepared command = systemSession.prepare(sql);
             command.setPersistedObjectId(id);
@@ -88,7 +85,7 @@ public class MetaRecord implements Comparable<MetaRecord> {
      * @param listener the database event listener
      * @return the prepared command
      */
-    Prepared prepare(Database db, Session systemSession, DatabaseEventListener listener) {
+    Prepared prepare(Database db, SessionLocal systemSession, DatabaseEventListener listener) {
         try {
             Prepared command = systemSession.prepare(sql);
             command.setPersistedObjectId(id);
@@ -113,6 +110,12 @@ public class MetaRecord implements Comparable<MetaRecord> {
         } catch (DbException e) {
             throwException(db, listener, e, sql);
         }
+    }
+
+    private static boolean isPrimaryOrUniqueConstraint(Prepared record) {
+        int type = record.getType();
+        return type == CommandInterface.ALTER_TABLE_ADD_CONSTRAINT_PRIMARY_KEY
+            || type == CommandInterface.ALTER_TABLE_ADD_CONSTRAINT_UNIQUE;
     }
 
     private static void throwException(Database db, DatabaseEventListener listener, DbException e, String sql) {
@@ -196,14 +199,13 @@ public class MetaRecord implements Comparable<MetaRecord> {
         case DbObject.COMMENT:
             return 15;
         default:
-            throw DbException.throwInternalError("type="+objectType);
+            throw DbException.getInternalError("type=" + objectType);
         }
     }
 
     @Override
     public String toString() {
-        return "MetaRecord [id=" + id + ", objectType=" + objectType +
-                ", sql=" + sql + "]";
+        return "MetaRecord [id=" + id + ", objectType=" + objectType + ", sql=" + sql + ']';
     }
 
 }

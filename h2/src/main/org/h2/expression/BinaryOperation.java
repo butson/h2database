@@ -1,14 +1,14 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
-import org.h2.engine.Session;
+import org.h2.engine.Constants;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.IntervalOperation.IntervalOpType;
-import org.h2.expression.function.DateTimeFunctions;
-import org.h2.expression.function.Function;
+import org.h2.expression.function.DateTimeFunction;
 import org.h2.message.DbException;
 import org.h2.value.DataType;
 import org.h2.value.TypeInfo;
@@ -39,14 +39,9 @@ public class BinaryOperation extends Operation2 {
         MULTIPLY,
 
         /**
-         * This operation represents a division as in 4 * 2.
+         * This operation represents a division as in 4 / 2.
          */
-        DIVIDE,
-
-        /**
-         * This operation represents a modulus as in 5 % 2.
-         */
-        MODULUS
+        DIVIDE
     }
 
     private OpType opType;
@@ -71,12 +66,16 @@ public class BinaryOperation extends Operation2 {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+    public boolean needParentheses() {
+        return true;
+    }
+
+    @Override
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
         // don't remove the space, otherwise it might end up some thing like
         // --1 which is a line remark
-        builder.append('(');
-        left.getSQL(builder, sqlFlags).append(' ').append(getOperationToken()).append(' ');
-        return right.getSQL(builder, sqlFlags).append(')');
+        left.getSQL(builder, sqlFlags, AUTO_PARENTHESES).append(' ').append(getOperationToken()).append(' ');
+        return right.getSQL(builder, sqlFlags, AUTO_PARENTHESES);
     }
 
     private String getOperationToken() {
@@ -89,15 +88,13 @@ public class BinaryOperation extends Operation2 {
             return "*";
         case DIVIDE:
             return "/";
-        case MODULUS:
-            return "%";
         default:
-            throw DbException.throwInternalError("opType=" + opType);
+            throw DbException.getInternalError("opType=" + opType);
         }
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         Value l = left.getValue(session).convertTo(type, session);
         Value r = right.getValue(session);
         if (convertRight) {
@@ -123,19 +120,14 @@ public class BinaryOperation extends Operation2 {
             if (l == ValueNull.INSTANCE || r == ValueNull.INSTANCE) {
                 return ValueNull.INSTANCE;
             }
-            return l.divide(r, right.getType().getPrecision());
-        case MODULUS:
-            if (l == ValueNull.INSTANCE || r == ValueNull.INSTANCE) {
-                return ValueNull.INSTANCE;
-            }
-            return l.modulus(r);
+            return l.divide(r, type);
         default:
-            throw DbException.throwInternalError("type=" + opType);
+            throw DbException.getInternalError("type=" + opType);
         }
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         left = left.optimize(session);
         right = right.optimize(session);
         TypeInfo leftType = left.getType(), rightType = right.getType();
@@ -152,7 +144,7 @@ public class BinaryOperation extends Operation2 {
             if (forcedType != null) {
                 throw getUnexpectedForcedTypeException();
             }
-            return optimizeInterval(session, l, r);
+            return optimizeInterval(l, r);
         } else if (DataType.isDateTimeType(l) || DataType.isDateTimeType(r)) {
             return optimizeDateTime(session, l, r);
         } else if (forcedType != null) {
@@ -161,6 +153,8 @@ public class BinaryOperation extends Operation2 {
             int dataType = Value.getHigherOrder(l, r);
             if (dataType == Value.NUMERIC) {
                 optimizeNumeric(leftType, rightType);
+            } else if (dataType == Value.DECFLOAT) {
+                optimizeDecfloat(leftType, rightType);
             } else if (dataType == Value.ENUM) {
                 type = TypeInfo.TYPE_INTEGER;
             } else if (DataType.isCharacterStringType(dataType)
@@ -207,26 +201,57 @@ public class BinaryOperation extends Operation2 {
             precision = leftPrecision + rightPrecision;
             scale = leftScale + rightScale;
             break;
-        case DIVIDE:
+        case DIVIDE: {
             // Precision and scale are implementation-defined.
-            scale = ValueNumeric.getQuotientScale(leftScale, rightPrecision, rightScale);
+            long scaleAsLong = leftScale - rightScale + rightPrecision * 2;
+            if (scaleAsLong >= ValueNumeric.MAXIMUM_SCALE) {
+                scale = ValueNumeric.MAXIMUM_SCALE;
+            } else if (scaleAsLong <= 0) {
+                scale = 0;
+            } else {
+                scale = (int) scaleAsLong;
+            }
             // Divider can be effectively multiplied by no more than
             // 10^rightScale, so add rightScale to its precision and adjust the
             // result to the changes in scale.
             precision = leftPrecision + rightScale - leftScale + scale;
+            // If precision is too large, reduce it together with scale
+            if (precision > Constants.MAX_NUMERIC_PRECISION) {
+                long sub = Math.min(precision - Constants.MAX_NUMERIC_PRECISION, scale);
+                precision -= sub;
+                scale -= sub;
+            }
             break;
-        case MODULUS:
-            // Non-standard operation.
-            precision = rightPrecision;
-            scale = rightScale;
-            break;
+        }
         default:
-            throw DbException.throwInternalError("type=" + opType);
+            throw DbException.getInternalError("type=" + opType);
         }
         type = TypeInfo.getTypeInfo(Value.NUMERIC, precision, scale, null);
     }
 
-    private Expression optimizeInterval(Session session, int l, int r) {
+    private void optimizeDecfloat(TypeInfo leftType, TypeInfo rightType) {
+        leftType = leftType.toDecfloatType();
+        rightType = rightType.toDecfloatType();
+        long leftPrecision = leftType.getPrecision(), rightPrecision = rightType.getPrecision();
+        long precision;
+        switch (opType) {
+        case PLUS:
+        case MINUS:
+        case DIVIDE:
+            // Add one extra digit to the largest precision.
+            precision = Math.max(leftPrecision, rightPrecision) + 1;
+            break;
+        case MULTIPLY:
+            // Use sum of precisions.
+            precision = leftPrecision + rightPrecision;
+            break;
+        default:
+            throw DbException.getInternalError("type=" + opType);
+        }
+        type = TypeInfo.getTypeInfo(Value.DECFLOAT, precision, 0, null);
+    }
+
+    private Expression optimizeInterval(int l, int r) {
         boolean lInterval = false, lNumeric = false, lDateTime = false;
         if (DataType.isIntervalType(l)) {
             lInterval = true;
@@ -299,7 +324,7 @@ public class BinaryOperation extends Operation2 {
         throw getUnsupported(l, r);
     }
 
-    private Expression optimizeDateTime(Session session, int l, int r) {
+    private Expression optimizeDateTime(SessionLocal session, int l, int r) {
         switch (opType) {
         case PLUS: {
             if (DataType.isDateTimeType(l)) {
@@ -320,19 +345,16 @@ public class BinaryOperation extends Operation2 {
             switch (l) {
             case Value.INTEGER:
                 // Oracle date add
-                return Function.getFunctionWithArgs(Function.DATEADD,
-                        ValueExpression.get(ValueInteger.get(DateTimeFunctions.DAY)), left, right).optimize(session);
+                return new DateTimeFunction(DateTimeFunction.DATEADD, DateTimeFunction.DAY, left, right)
+                        .optimize(session);
             case Value.NUMERIC:
             case Value.REAL:
             case Value.DOUBLE:
+            case Value.DECFLOAT:
                 // Oracle date add
-                return Function
-                        .getFunctionWithArgs(Function.DATEADD,
-                                ValueExpression.get(ValueInteger.get(DateTimeFunctions.SECOND)),
-                                new BinaryOperation(OpType.MULTIPLY,
-                                        ValueExpression.get(ValueInteger.get(60 * 60 * 24)), left),
-                                right)
-                        .optimize(session);
+                return new DateTimeFunction(DateTimeFunction.DATEADD, DateTimeFunction.SECOND,
+                        new BinaryOperation(OpType.MULTIPLY, ValueExpression.get(ValueInteger.get(60 * 60 * 24)),
+                                left), right).optimize(session);
             }
             break;
         }
@@ -347,23 +369,20 @@ public class BinaryOperation extends Operation2 {
                         throw getUnexpectedForcedTypeException();
                     }
                     // Oracle date subtract
-                    return Function.getFunctionWithArgs(Function.DATEADD,
-                            ValueExpression.get(ValueInteger.get(DateTimeFunctions.DAY)), //
-                            new UnaryOperation(right), //
-                            left).optimize(session);
+                    return new DateTimeFunction(DateTimeFunction.DATEADD, DateTimeFunction.DAY,
+                            new UnaryOperation(right), left).optimize(session);
                 }
                 case Value.NUMERIC:
                 case Value.REAL:
-                case Value.DOUBLE: {
+                case Value.DOUBLE:
+                case Value.DECFLOAT: {
                     if (forcedType != null) {
                         throw getUnexpectedForcedTypeException();
                     }
                     // Oracle date subtract
-                    return Function.getFunctionWithArgs(Function.DATEADD,
-                                ValueExpression.get(ValueInteger.get(DateTimeFunctions.SECOND)),
-                                new UnaryOperation(new BinaryOperation(OpType.MULTIPLY, //
-                                        ValueExpression.get(ValueInteger.get(60 * 60 * 24)), right)), //
-                                left).optimize(session);
+                    return new DateTimeFunction(DateTimeFunction.DATEADD, DateTimeFunction.SECOND,
+                            new BinaryOperation(OpType.MULTIPLY, ValueExpression.get(ValueInteger.get(-60 * 60 * 24)),
+                                    right), left).optimize(session);
                 }
                 case Value.TIME:
                 case Value.TIME_TZ:
@@ -407,11 +426,11 @@ public class BinaryOperation extends Operation2 {
 
     private DbException getUnsupported(int l, int r) {
         return DbException.getUnsupportedException(
-                DataType.getDataType(l).name + ' ' + getOperationToken() + ' ' + DataType.getDataType(r).name);
+                Value.getTypeName(l) + ' ' + getOperationToken() + ' ' + Value.getTypeName(r));
     }
 
     private DbException getUnexpectedForcedTypeException() {
-        StringBuilder builder = getSQL(new StringBuilder(), TRACE_SQL_FLAGS);
+        StringBuilder builder = getUnenclosedSQL(new StringBuilder(), TRACE_SQL_FLAGS);
         int index = builder.length();
         return DbException.getSyntaxError(
                 IntervalOperation.getForcedTypeSQL(builder.append(' '), forcedType).toString(), index, "");

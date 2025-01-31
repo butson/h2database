@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,20 +7,19 @@ package org.h2.command;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
+
 import org.h2.api.DatabaseEventListener;
 import org.h2.api.ErrorCode;
 import org.h2.engine.Database;
 import org.h2.engine.DbObject;
-import org.h2.engine.Session;
+import org.h2.engine.QueryStatisticsData;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.Parameter;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
 import org.h2.result.ResultInterface;
-import org.h2.table.TableView;
 import org.h2.util.HasSQL;
-import org.h2.util.MathUtils;
 
 /**
  * A prepared statement.
@@ -30,12 +29,17 @@ public abstract class Prepared {
     /**
      * The session.
      */
-    protected Session session;
+    protected SessionLocal session;
 
     /**
      * The SQL string.
      */
     protected String sqlStatement;
+
+    /**
+     * The SQL tokens.
+     */
+    protected ArrayList<Token> sqlTokens;
 
     /**
      * Whether to create a new object (for indexes).
@@ -46,6 +50,8 @@ public abstract class Prepared {
      * The list of parameters.
      */
     protected ArrayList<Parameter> parameters;
+
+    private boolean withParamValues;
 
     /**
      * If the query should be prepared before each execution. This is set for
@@ -64,20 +70,15 @@ public abstract class Prepared {
     private int persistedObjectId;
     private long currentRowNumber;
     private int rowScanCount;
-    /**
-     * Common table expressions (CTE) in queries require us to create temporary views,
-     * which need to be cleaned up once a command is done executing.
-     */
-    private List<TableView> cteCleanups;
 
     /**
      * Create a new object.
      *
      * @param session the session
      */
-    public Prepared(Session session) {
+    public Prepared(SessionLocal session) {
         this.session = session;
-        modificationMetaId = session.getDatabase().getModificationMetaId();
+        modificationMetaId = getDatabase().getModificationMetaId();
     }
 
     /**
@@ -118,7 +119,7 @@ public abstract class Prepared {
      * @return true if it must
      */
     public boolean needRecompile() {
-        Database db = session.getDatabase();
+        Database db = getDatabase();
         if (db == null) {
             throw DbException.get(ErrorCode.CONNECTION_BROKEN_1, "database closed");
         }
@@ -164,6 +165,25 @@ public abstract class Prepared {
      */
     public ArrayList<Parameter> getParameters() {
         return parameters;
+    }
+
+    /**
+     * Returns whether values of parameters were specified in SQL.
+     *
+     * @return are values of parameters were specified in SQL
+     */
+    public boolean isWithParamValues() {
+        return withParamValues;
+    }
+
+    /**
+     * Sets whether values of parameters were specified in SQL.
+     *
+     * @param withParamValues
+     *            are values of parameters were specified in SQL
+     */
+    public void setWithParamValues(boolean withParamValues) {
+        this.withParamValues = withParamValues;
     }
 
     /**
@@ -215,7 +235,7 @@ public abstract class Prepared {
      * @return the update count
      * @throws DbException if it is a query
      */
-    public int update() {
+    public long update() {
         throw DbException.get(ErrorCode.METHOD_NOT_ALLOWED_FOR_QUERY);
     }
 
@@ -227,7 +247,7 @@ public abstract class Prepared {
      * @throws DbException if it is not a query
      */
     @SuppressWarnings("unused")
-    public ResultInterface query(int maxrows) {
+    public ResultInterface query(long maxrows) {
         throw DbException.get(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY);
     }
 
@@ -235,9 +255,11 @@ public abstract class Prepared {
      * Set the SQL statement.
      *
      * @param sql the SQL statement
+     * @param sqlTokens the SQL tokens
      */
-    public void setSQL(String sql) {
+    public final void setSQL(String sql, ArrayList<Token> sqlTokens) {
         this.sqlStatement = sql;
+        this.sqlTokens = sqlTokens;
     }
 
     /**
@@ -245,8 +267,17 @@ public abstract class Prepared {
      *
      * @return the SQL statement
      */
-    public String getSQL() {
+    public final String getSQL() {
         return sqlStatement;
+    }
+
+    /**
+     * Get the SQL tokens.
+     *
+     * @return the SQL tokens
+     */
+    public final ArrayList<Token> getSQLTokens() {
+        return sqlTokens;
     }
 
     /**
@@ -271,9 +302,9 @@ public abstract class Prepared {
     protected int getObjectId() {
         int id = persistedObjectId;
         if (id == 0) {
-            id = session.getDatabase().allocateObjectId();
+            id = getDatabase().allocateObjectId();
         } else if (id < 0) {
-            throw DbException.throwInternalError("Prepared.getObjectId() was called before");
+            throw DbException.getInternalError("Prepared.getObjectId() was called before");
         }
         persistedObjectId = ~persistedObjectId;  // while negative, it can be restored later
         return id;
@@ -285,8 +316,19 @@ public abstract class Prepared {
      * @param sqlFlags formatting flags
      * @return the execution plan
      */
-    public String getPlanSQL(int sqlFlags) {
-        return null;
+    public final String getPlanSQL(int sqlFlags) {
+        return getPlanSQL(new StringBuilder(), sqlFlags).toString();
+    }
+
+    /**
+     * Appends the SQL statement with the execution plan.
+     *
+     * @param builder string builder
+     * @param sqlFlags formatting flags
+     * @return the execution plan
+     */
+    public StringBuilder getPlanSQL(StringBuilder builder, int sqlFlags) {
+        return builder;
     }
 
     /**
@@ -317,30 +359,30 @@ public abstract class Prepared {
      *
      * @param currentSession the new session
      */
-    public void setSession(Session currentSession) {
+    public void setSession(SessionLocal currentSession) {
         this.session = currentSession;
     }
 
     /**
      * Print information about the statement executed if info trace level is
      * enabled.
-     *
+     * @param database to update statistics
      * @param startTimeNanos when the statement was started
      * @param rowCount the query or update row count
      */
-    void trace(long startTimeNanos, int rowCount) {
+    void trace(Database database, long startTimeNanos, long rowCount) {
         if (session.getTrace().isInfoEnabled() && startTimeNanos > 0) {
             long deltaTimeNanos = System.nanoTime() - startTimeNanos;
             String params = Trace.formatParams(parameters);
-            session.getTrace().infoSQL(sqlStatement, params, rowCount,
-                    deltaTimeNanos / 1000 / 1000);
+            session.getTrace().infoSQL(sqlStatement, params, rowCount, deltaTimeNanos / 1_000_000L);
         }
-        // startTime_nanos can be zero for the command that actually turns on
-        // statistics
-        if (session.getDatabase().getQueryStatistics() && startTimeNanos != 0) {
-            long deltaTimeNanos = System.nanoTime() - startTimeNanos;
-            session.getDatabase().getQueryStatisticsData().
-                    update(toString(), deltaTimeNanos, rowCount);
+        // startTime_nanos can be zero for the command that actually turns on statistics
+        if (database != null && startTimeNanos != 0) {
+            QueryStatisticsData queryStatisticsData = database.getQueryStatisticsData();
+            if (queryStatisticsData != null) {
+                long deltaTimeNanos = System.nanoTime() - startTimeNanos;
+                queryStatisticsData.update(toString(), deltaTimeNanos, rowCount);
+            }
         }
     }
 
@@ -381,11 +423,8 @@ public abstract class Prepared {
      */
     private void setProgress() {
         if ((currentRowNumber & 127) == 0) {
-            session.getDatabase().setProgress(
-                    DatabaseEventListener.STATE_STATEMENT_PROGRESS,
-                    sqlStatement,
-                    // TODO update interface
-                    MathUtils.convertLongToInt(currentRowNumber), 0);
+            getDatabase().setProgress(DatabaseEventListener.STATE_STATEMENT_PROGRESS, sqlStatement,
+                    currentRowNumber, 0L);
         }
     }
 
@@ -406,9 +445,7 @@ public abstract class Prepared {
      * @return the SQL snippet
      */
     public static String getSimpleSQL(Expression[] list) {
-        StringBuilder builder = new StringBuilder();
-        Expression.writeExpressions(builder, list, HasSQL.TRACE_SQL_FLAGS);
-        return builder.toString();
+        return Expression.writeExpressions(new StringBuilder(), list, HasSQL.TRACE_SQL_FLAGS).toString();
     }
 
     /**
@@ -419,7 +456,7 @@ public abstract class Prepared {
      * @param values the values of the row
      * @return the exception
      */
-    protected DbException setRow(DbException e, int rowId, String values) {
+    protected final DbException setRow(DbException e, long rowId, String values) {
         StringBuilder buff = new StringBuilder();
         if (sqlStatement != null) {
             buff.append(sqlStatement);
@@ -436,23 +473,7 @@ public abstract class Prepared {
         return false;
     }
 
-    /**
-     * @return the temporary views created for CTE's.
-     */
-    public List<TableView> getCteCleanups() {
-        return cteCleanups;
-    }
-
-    /**
-     * Set the temporary views created for CTE's.
-     *
-     * @param cteCleanups the temporary views
-     */
-    public void setCteCleanups(List<TableView> cteCleanups) {
-        this.cteCleanups = cteCleanups;
-    }
-
-    public Session getSession() {
+    public final SessionLocal getSession() {
         return session;
     }
 
@@ -462,4 +483,18 @@ public abstract class Prepared {
      * @param dependencies collection of dependencies to populate
      */
     public void collectDependencies(HashSet<DbObject> dependencies) {}
+
+    protected final Database getDatabase() {
+        return session.getDatabase();
+    }
+
+    /**
+     * Returns is this command can be repeated again on locking failure.
+     *
+     * @return is this command can be repeated again on locking failure
+     */
+    public boolean isRetryable() {
+        return true;
+    }
+
 }

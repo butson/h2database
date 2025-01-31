@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -196,9 +196,6 @@ EXPLAIN SELECT "VALUE" FROM TEST ORDER BY "VALUE" LIMIT 10;
 -->    /* index sorted */
 ;
 
--- To optimize getting the largest values, a new descending index is required
-CREATE INDEX IDX_TEST_VALUE_D ON TEST("VALUE" DESC);
-
 -- Query the largest 10 values
 SELECT "VALUE" FROM TEST ORDER BY "VALUE" DESC LIMIT 3;
 --> 99.89
@@ -211,7 +208,7 @@ EXPLAIN SELECT "VALUE" FROM TEST ORDER BY "VALUE" DESC LIMIT 10;
 --> SELECT
 -->        "VALUE"
 -->    FROM "PUBLIC"."TEST"
--->        /* PUBLIC.IDX_TEST_VALUE_D */
+-->        /* PUBLIC.IDX_TEST_VALUE */
 -->    ORDER BY 1 DESC
 -->    FETCH FIRST 10 ROWS ONLY
 -->    /* index sorted */
@@ -262,7 +259,7 @@ EXPLAIN SELECT * FROM TEST WHERE ID IN (10, 20) AND DATA IN (1, 2);
 -->        "PUBLIC"."TEST"."ID",
 -->        "PUBLIC"."TEST"."DATA"
 -->    FROM "PUBLIC"."TEST"
--->        /* PUBLIC.PRIMARY_KEY_2: ID IN(10, 20) */
+-->        /* PUBLIC.TEST_DATA: DATA IN(1, 2) */
 -->    WHERE ("ID" IN(10, 20))
 -->        AND ("DATA" IN(1, 2))
 ;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -35,7 +35,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.h2.api.ErrorCode;
-import org.h2.jdbc.JdbcConnection;
 import org.h2.store.FileLister;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
@@ -336,7 +335,7 @@ public class TestCrashAPI extends TestDb implements Runnable {
                 continue;
             }
             if (random.getInt(2000) == 0 && conn != null) {
-                ((JdbcConnection) conn).setPowerOffCount(random.getInt(50));
+                setPowerOffCount(conn, random.getInt(50));
             }
             Object o = objects.get(objectId);
             if (o == null) {

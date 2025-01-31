@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,7 +10,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import org.h2.mvstore.DataUtils;
 import org.h2.security.AES;
 import org.h2.security.SHA256;
 import org.h2.store.fs.FileBaseDefault;
@@ -24,7 +26,7 @@ public class FileEncrypt extends FileBaseDefault {
     /**
      * The block size.
      */
-    static final int BLOCK_SIZE = 4096;
+    public static final int BLOCK_SIZE = 4096;
 
     /**
      * The block size bit mask.
@@ -37,7 +39,7 @@ public class FileEncrypt extends FileBaseDefault {
      */
     static final int HEADER_LENGTH = BLOCK_SIZE;
 
-    private static final byte[] HEADER = "H2encrypt\n".getBytes();
+    private static final byte[] HEADER = "H2encrypt\n".getBytes(StandardCharsets.ISO_8859_1);
     private static final int SALT_POS = HEADER.length;
 
     /**
@@ -60,9 +62,11 @@ public class FileEncrypt extends FileBaseDefault {
 
     private final String name;
 
-    private XTS xts;
+    private volatile XTS xts;
 
     private byte[] encryptionKey;
+
+    private FileEncrypt source;
 
     public FileEncrypt(String name, byte[] encryptionKey, FileChannel base) {
         // don't do any read or write operations here, because they could
@@ -73,31 +77,70 @@ public class FileEncrypt extends FileBaseDefault {
         this.encryptionKey = encryptionKey;
     }
 
-    private void init() throws IOException {
+    public FileEncrypt(String name, FileEncrypt source, FileChannel base) {
+        // don't do any read or write operations here, because they could
+        // fail if the file is locked, and we want to give the caller a
+        // chance to lock the file first
+        this.name = name;
+        this.base = base;
+        this.source = source;
+        try {
+            source.init();
+        } catch (IOException e) {
+            throw DataUtils.newMVStoreException(DataUtils.ERROR_INTERNAL,
+                                        "Can not open {0} using encryption of {1}", name, source.name);
+        }
+    }
+
+    private XTS init() throws IOException {
+        // Keep this method small to allow inlining
+        XTS xts = this.xts;
+        if (xts == null) {
+            xts = createXTS();
+        }
+        return xts;
+    }
+
+    private synchronized XTS createXTS() throws IOException {
+        XTS xts = this.xts;
         if (xts != null) {
-            return;
+            return xts;
         }
-        this.size = base.size() - HEADER_LENGTH;
-        boolean newFile = size < 0;
-        byte[] salt;
-        if (newFile) {
-            byte[] header = Arrays.copyOf(HEADER, BLOCK_SIZE);
-            salt = MathUtils.secureRandomBytes(SALT_LENGTH);
-            System.arraycopy(salt, 0, header, SALT_POS, salt.length);
-            writeFully(base, 0, ByteBuffer.wrap(header));
-            size = 0;
-        } else {
-            salt = new byte[SALT_LENGTH];
-            readFully(base, SALT_POS, ByteBuffer.wrap(salt));
-            if ((size & BLOCK_SIZE_MASK) != 0) {
-                size -= BLOCK_SIZE;
+        assert size == 0;
+        long sz = base.size() - HEADER_LENGTH;
+        boolean existingFile = sz >= 0;
+        if (encryptionKey != null) {
+            byte[] salt;
+            if (existingFile) {
+                salt = new byte[SALT_LENGTH];
+                readFully(base, SALT_POS, ByteBuffer.wrap(salt));
+            } else {
+                byte[] header = Arrays.copyOf(HEADER, BLOCK_SIZE);
+                salt = MathUtils.secureRandomBytes(SALT_LENGTH);
+                System.arraycopy(salt, 0, header, SALT_POS, salt.length);
+                writeFully(base, 0, ByteBuffer.wrap(header));
             }
+            AES cipher = new AES();
+            cipher.setKey(SHA256.getPBKDF2(encryptionKey, salt, HASH_ITERATIONS, 16));
+            encryptionKey = null;
+            xts = new XTS(cipher);
+        } else {
+            if (!existingFile) {
+                ByteBuffer byteBuffer = ByteBuffer.allocateDirect(BLOCK_SIZE);
+                readFully(source.base, 0, byteBuffer);
+                byteBuffer.flip();
+                writeFully(base, 0, byteBuffer);
+            }
+            xts = source.xts;
+            source = null;
         }
-        AES cipher = new AES();
-        cipher.setKey(SHA256.getPBKDF2(
-                encryptionKey, salt, HASH_ITERATIONS, 16));
-        encryptionKey = null;
-        xts = new XTS(cipher);
+        if (existingFile) {
+            if ((sz & BLOCK_SIZE_MASK) != 0) {
+                sz -= BLOCK_SIZE;
+            }
+            size = sz;
+        }
+        return this.xts = xts;
     }
 
     @Override
@@ -111,34 +154,30 @@ public class FileEncrypt extends FileBaseDefault {
         if (len == 0) {
             return 0;
         }
-        init();
+        XTS xts = init();
         len = (int) Math.min(len, size - position);
         if (position >= size) {
             return -1;
         } else if (position < 0) {
             throw new IllegalArgumentException("pos: " + position);
         }
-        if ((position & BLOCK_SIZE_MASK) != 0 ||
-                (len & BLOCK_SIZE_MASK) != 0) {
+        if ((position & BLOCK_SIZE_MASK) != 0 || (len & BLOCK_SIZE_MASK) != 0) {
             // either the position or the len is unaligned:
             // read aligned, and then truncate
             long p = position / BLOCK_SIZE * BLOCK_SIZE;
             int offset = (int) (position - p);
             int l = (len + offset + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
             ByteBuffer temp = ByteBuffer.allocate(l);
-            readInternal(temp, p, l);
-            temp.flip();
-            temp.limit(offset + len);
-            temp.position(offset);
+            readInternal(temp, p, l, xts);
+            temp.flip().limit(offset + len).position(offset);
             dst.put(temp);
             return len;
         }
-        readInternal(dst, position, len);
+        readInternal(dst, position, len, xts);
         return len;
     }
 
-    private void readInternal(ByteBuffer dst, long position, int len)
-            throws IOException {
+    private void readInternal(ByteBuffer dst, long position, int len, XTS xts) throws IOException {
         int x = dst.position();
         readFully(base, position + HEADER_LENGTH, dst);
         long block = position / BLOCK_SIZE;
@@ -149,8 +188,7 @@ public class FileEncrypt extends FileBaseDefault {
         }
     }
 
-    private static void readFully(FileChannel file, long pos, ByteBuffer dst)
-            throws IOException {
+    private static void readFully(FileChannel file, long pos, ByteBuffer dst) throws IOException {
         do {
             int len = file.read(dst, pos);
             if (len < 0) {
@@ -162,10 +200,9 @@ public class FileEncrypt extends FileBaseDefault {
 
     @Override
     public int write(ByteBuffer src, long position) throws IOException {
-        init();
+        XTS xts = init();
         int len = src.remaining();
-        if ((position & BLOCK_SIZE_MASK) != 0 ||
-                (len & BLOCK_SIZE_MASK) != 0) {
+        if ((position & BLOCK_SIZE_MASK) != 0 || (len & BLOCK_SIZE_MASK) != 0) {
             // either the position or the len is unaligned:
             // read aligned, and then truncate
             long p = position / BLOCK_SIZE * BLOCK_SIZE;
@@ -175,15 +212,12 @@ public class FileEncrypt extends FileBaseDefault {
             int available = (int) (size - p + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
             int readLen = Math.min(l, available);
             if (readLen > 0) {
-                readInternal(temp, p, readLen);
+                readInternal(temp, p, readLen, xts);
                 temp.rewind();
             }
-            temp.limit(offset + len);
-            temp.position(offset);
-            temp.put(src);
-            temp.limit(l);
-            temp.rewind();
-            writeInternal(temp, p, l);
+            temp.limit(offset + len).position(offset);
+            temp.put(src).limit(l).rewind();
+            writeInternal(temp, p, l, xts);
             long p2 = position + len;
             size = Math.max(size, p2);
             int plus = (int) (size & BLOCK_SIZE_MASK);
@@ -193,16 +227,14 @@ public class FileEncrypt extends FileBaseDefault {
             }
             return len;
         }
-        writeInternal(src, position, len);
+        writeInternal(src, position, len, xts);
         long p2 = position + len;
         size = Math.max(size, p2);
         return len;
     }
 
-    private void writeInternal(ByteBuffer src, long position, int len)
-            throws IOException {
-        ByteBuffer crypt = ByteBuffer.allocate(len);
-        crypt.put(src);
+    private void writeInternal(ByteBuffer src, long position, int len, XTS xts) throws IOException {
+        ByteBuffer crypt = ByteBuffer.allocate(len).put(src);
         crypt.flip();
         long block = position / BLOCK_SIZE;
         int x = 0, l = len;
@@ -214,12 +246,9 @@ public class FileEncrypt extends FileBaseDefault {
         writeFully(base, position + HEADER_LENGTH, crypt);
     }
 
-    private static void writeFully(FileChannel file, long pos,
-            ByteBuffer src) throws IOException {
-        int off = 0;
+    private static void writeFully(FileChannel file, long pos, ByteBuffer src) throws IOException {
         do {
-            int len = file.write(src, pos + off);
-            off += len;
+            pos += file.write(src, pos);
         } while (src.remaining() > 0);
     }
 
@@ -253,8 +282,7 @@ public class FileEncrypt extends FileBaseDefault {
     }
 
     @Override
-    public FileLock tryLock(long position, long size, boolean shared)
-            throws IOException {
+    public FileLock tryLock(long position, long size, boolean shared) throws IOException {
         return base.tryLock(position, size, shared);
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -19,12 +19,9 @@ public class AbbaDetector {
 
     private static final boolean TRACE = false;
 
-    private static final ThreadLocal<Deque<Object>> STACK =
-            new ThreadLocal<Deque<Object>>() {
-                @Override protected Deque<Object> initialValue() {
-                    return new ArrayDeque<>();
-            }
-        };
+    private static final ThreadLocal<Deque<Object>> STACK = ThreadLocal.withInitial(ArrayDeque::new);
+
+    private static final StackWalker STACK_WALKER = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
 
     /**
      * Map of (object A) -> (
@@ -45,9 +42,7 @@ public class AbbaDetector {
      */
     public static Object begin(Object o) {
         if (o == null) {
-            o = new SecurityManager() {
-                Class<?> clazz = getClassContext()[2];
-            }.clazz;
+            o = STACK_WALKER.getCallerClass();
         }
         Deque<Object> stack = STACK.get();
         if (!stack.isEmpty()) {

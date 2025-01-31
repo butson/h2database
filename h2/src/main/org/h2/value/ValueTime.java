@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,7 +9,8 @@ import org.h2.api.ErrorCode;
 import org.h2.engine.CastDataProvider;
 import org.h2.message.DbException;
 import org.h2.util.DateTimeUtils;
-import org.h2.util.JSR310Utils;
+
+import static org.h2.util.DateTimeUtils.NANOS_PER_HOUR;
 
 /**
  * Implementation of the TIME data type.
@@ -38,10 +39,20 @@ public final class ValueTime extends Value {
      */
     public static final int MAXIMUM_SCALE = 9;
 
+    private static final ValueTime[] STATIC_CACHE;
+
     /**
      * Nanoseconds since midnight
      */
     private final long nanos;
+
+    static {
+        ValueTime[] cache = new ValueTime[24];
+        for (int hour = 0; hour < 24; hour++) {
+            cache[hour] = new ValueTime(hour * NANOS_PER_HOUR);
+        }
+        STATIC_CACHE = cache;
+    }
 
     /**
      * @param nanos nanoseconds since midnight
@@ -58,10 +69,11 @@ public final class ValueTime extends Value {
      */
     public static ValueTime fromNanos(long nanos) {
         if (nanos < 0L || nanos >= DateTimeUtils.NANOS_PER_DAY) {
-            StringBuilder builder = new StringBuilder();
-            DateTimeUtils.appendTime(builder, nanos);
-            throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2,
-                    "TIME", builder.toString());
+            throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2, "TIME",
+                    DateTimeUtils.appendTime(new StringBuilder(), nanos).toString());
+        }
+        if (nanos % NANOS_PER_HOUR == 0L) {
+            return STATIC_CACHE[(int) (nanos / NANOS_PER_HOUR)];
         }
         return (ValueTime) Value.cache(new ValueTime(nanos));
     }
@@ -70,11 +82,14 @@ public final class ValueTime extends Value {
      * Parse a string to a ValueTime.
      *
      * @param s the string to parse
+     * @param provider
+     *            the cast information provider, may be {@code null} for
+     *            literals without time zone
      * @return the time
      */
-    public static ValueTime parse(String s) {
+    public static ValueTime parse(String s, CastDataProvider provider) {
         try {
-            return fromNanos(DateTimeUtils.parseTimeNanos(s, 0, s.length()));
+            return (ValueTime) DateTimeUtils.parseTime(s, provider, false);
         } catch (Exception e) {
             throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2,
                     e, "TIME", s);
@@ -100,15 +115,12 @@ public final class ValueTime extends Value {
 
     @Override
     public String getString() {
-        StringBuilder builder = new StringBuilder(MAXIMUM_PRECISION);
-        DateTimeUtils.appendTime(builder, nanos);
-        return builder.toString();
+        return DateTimeUtils.appendTime(new StringBuilder(MAXIMUM_PRECISION), nanos).toString();
     }
 
     @Override
     public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        DateTimeUtils.appendTime(builder.append("TIME '"), nanos);
-        return builder.append('\'');
+        return DateTimeUtils.appendTime(builder.append("TIME '"), nanos).append('\'');
     }
 
     @Override
@@ -118,20 +130,12 @@ public final class ValueTime extends Value {
 
     @Override
     public boolean equals(Object other) {
-        if (this == other) {
-            return true;
-        }
-        return other instanceof ValueTime && nanos == (((ValueTime) other).nanos);
+        return this == other || other instanceof ValueTime && nanos == ((ValueTime) other).nanos;
     }
 
     @Override
     public int hashCode() {
         return (int) (nanos ^ (nanos >>> 32));
-    }
-
-    @Override
-    public Object getObject() {
-        return JSR310Utils.valueToLocalTime(this, null);
     }
 
     @Override
@@ -152,7 +156,7 @@ public final class ValueTime extends Value {
     }
 
     @Override
-    public Value divide(Value v, long divisorPrecision) {
+    public Value divide(Value v, TypeInfo quotientType) {
         return ValueTime.fromNanos((long) (nanos / v.getDouble()));
     }
 

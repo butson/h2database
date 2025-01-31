@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0, and the
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0, and the
  * EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  * Iso8601: Initial Developer: Robert Rathsack (firstName dot lastName at gmx
@@ -89,7 +89,7 @@ public class DateTimeUtils {
      * Multipliers for {@link #convertScale(long, int, long)} and
      * {@link #appendNanos(StringBuilder, int)}.
      */
-    private static final int[] FRACTIONAL_SECONDS_TABLE = { 1_000_000_000, 100_000_000,
+    static final int[] FRACTIONAL_SECONDS_TABLE = { 1_000_000_000, 100_000_000,
             10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1 };
 
     private static volatile TimeZoneProvider LOCAL;
@@ -127,17 +127,29 @@ public class DateTimeUtils {
      * @return current timestamp
      */
     public static ValueTimestampTimeZone currentTimestamp(TimeZoneProvider timeZone) {
-        Instant now = Instant.now();
-        long second = now.getEpochSecond();
-        int nano = now.getNano();
+        return currentTimestamp(timeZone, Instant.now());
+    }
+
+    /**
+     * Returns current timestamp using the specified instant for its value.
+     *
+     * @param timeZone
+     *            the time zone
+     * @param now
+     *            timestamp source, must be greater than or equal to
+     *            1970-01-01T00:00:00Z
+     * @return current timestamp
+     */
+    public static ValueTimestampTimeZone currentTimestamp(TimeZoneProvider timeZone, Instant now) {
         /*
          * This code intentionally does not support properly dates before UNIX
          * epoch because such support is not required for current dates.
          */
+        long second = now.getEpochSecond();
         int offset = timeZone.getTimeZoneOffsetUTC(second);
         second += offset;
         return ValueTimestampTimeZone.fromDateValueAndNanos(dateValueFromAbsoluteDay(second / SECONDS_PER_DAY),
-                second % SECONDS_PER_DAY * 1_000_000_000 + nano, offset);
+                second % SECONDS_PER_DAY * 1_000_000_000 + now.getNano(), offset);
     }
 
     /**
@@ -175,7 +187,7 @@ public class DateTimeUtils {
                 throw new IllegalArgumentException(s);
             }
         }
-        int year = Integer.parseInt(s.substring(start, yEnd));
+        int year = Integer.parseInt(s, start, yEnd, 10);
         int month = StringUtils.parseUInt31(s, mStart, mEnd);
         int day = StringUtils.parseUInt31(s, dStart, end);
         if (!isValidDate(year, month, day)) {
@@ -384,17 +396,20 @@ public class DateTimeUtils {
     }
 
     /**
-     * Parses TIME WITH TIME ZONE value from the specified string.
+     * Parses time value from the specified string.
      *
      * @param s
      *            string to parse
      * @param provider
      *            the cast information provider, or {@code null}
-     * @return parsed time with time zone
+     * @param withTimeZone
+     *            if {@code true} return {@link ValueTimeTimeZone} instead of
+     *            {@link ValueTime}
+     * @return parsed time
      */
-    public static ValueTimeTimeZone parseTimeWithTimeZone(String s, CastDataProvider provider) {
+    public static Value parseTime(String s, CastDataProvider provider, boolean withTimeZone) {
         int timeEnd;
-        TimeZoneProvider tz;
+        TimeZoneProvider tz = null;
         if (s.endsWith("Z")) {
             tz = TimeZoneProvider.UTC;
             timeEnd = s.length() - 1;
@@ -415,14 +430,26 @@ public class DateTimeUtils {
                     tz = TimeZoneProvider.ofId(s.substring(timeZoneStart + 1));
                     timeEnd = timeZoneStart;
                 } else {
-                    throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2, "TIME WITH TIME ZONE", s);
+                    timeEnd = s.length();
                 }
             }
-            if (!tz.hasFixedOffset()) {
+            if (tz != null && !tz.hasFixedOffset()) {
                 throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2, "TIME WITH TIME ZONE", s);
             }
         }
-        return ValueTimeTimeZone.fromNanos(parseTimeNanos(s, 0, timeEnd), tz.getTimeZoneOffsetUTC(0L));
+        long nanos = parseTimeNanos(s, 0, timeEnd);
+        if (withTimeZone) {
+            return ValueTimeTimeZone.fromNanos(nanos,
+                    tz != null ? tz.getTimeZoneOffsetUTC(0L)
+                            : (provider != null ? provider.currentTimestamp() : currentTimestamp(getTimeZone()))
+                                    .getTimeZoneOffsetSeconds());
+        }
+        if (tz != null) {
+            nanos = normalizeNanosOfDay(
+                    nanos + ((provider != null ? provider.currentTimestamp() : currentTimestamp(getTimeZone()))
+                            .getTimeZoneOffsetSeconds() - tz.getTimeZoneOffsetUTC(0L)) * NANOS_PER_SECOND);
+        }
+        return ValueTime.fromNanos(nanos);
     }
 
     /**
@@ -684,7 +711,11 @@ public class DateTimeUtils {
         if (month != 2) {
             return NORMAL_DAYS_PER_MONTH[month];
         }
-        return (year & 3) == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28;
+        return isLeapYear(year) ? 29 : 28;
+    }
+
+    static boolean isLeapYear(int year) {
+        return (year & 3) == 0 && (year % 100 != 0 || year % 400 == 0);
     }
 
     /**
@@ -967,8 +998,9 @@ public class DateTimeUtils {
      *
      * @param builder the target string builder
      * @param nanos the time in nanoseconds
+     * @return the specified string builder
      */
-    public static void appendTime(StringBuilder builder, long nanos) {
+    public static StringBuilder appendTime(StringBuilder builder, long nanos) {
         if (nanos < 0) {
             builder.append('-');
             nanos = -nanos;
@@ -988,7 +1020,7 @@ public class DateTimeUtils {
         StringUtils.appendTwoDigits(builder, h).append(':');
         StringUtils.appendTwoDigits(builder, m).append(':');
         StringUtils.appendTwoDigits(builder, (int) s);
-        appendNanos(builder, (int) nanos);
+        return appendNanos(builder, (int) nanos);
     }
 
     /**
@@ -996,8 +1028,9 @@ public class DateTimeUtils {
      *
      * @param builder string builder to append to
      * @param nanos nanoseconds of second
+     * @return the specified string builder
      */
-    static void appendNanos(StringBuilder builder, int nanos) {
+    static StringBuilder appendNanos(StringBuilder builder, int nanos) {
         if (nanos > 0) {
             builder.append('.');
             for (int i = 1; nanos < FRACTIONAL_SECONDS_TABLE[i]; i++) {
@@ -1017,34 +1050,35 @@ public class DateTimeUtils {
             }
             builder.append(nanos);
         }
+        return builder;
     }
 
     /**
      * Append a time zone to the string builder.
      *
-     * @param buff the target string builder
+     * @param builder the target string builder
      * @param tz the time zone offset in seconds
+     * @return the specified string builder
      */
-    public static void appendTimeZone(StringBuilder buff, int tz) {
+    public static StringBuilder appendTimeZone(StringBuilder builder, int tz) {
         if (tz < 0) {
-            buff.append('-');
+            builder.append('-');
             tz = -tz;
         } else {
-            buff.append('+');
+            builder.append('+');
         }
         int rem = tz / 3_600;
-        StringUtils.appendTwoDigits(buff, rem);
+        StringUtils.appendTwoDigits(builder, rem);
         tz -= rem * 3_600;
         if (tz != 0) {
             rem = tz / 60;
-            buff.append(':');
-            StringUtils.appendTwoDigits(buff, rem);
+            StringUtils.appendTwoDigits(builder.append(':'), rem);
             tz -= rem * 60;
             if (tz != 0) {
-                buff.append(':');
-                StringUtils.appendTwoDigits(buff, tz);
+                StringUtils.appendTwoDigits(builder.append(':'), tz);
             }
         }
+        return builder;
     }
 
     /**
@@ -1076,6 +1110,7 @@ public class DateTimeUtils {
         }
         return b.toString();
     }
+
 
     /**
      * Converts scale of nanoseconds.

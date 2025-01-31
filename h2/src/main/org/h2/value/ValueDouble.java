@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -17,9 +17,14 @@ import org.h2.message.DbException;
 public final class ValueDouble extends Value {
 
     /**
-     * The precision in digits.
+     * The precision in bits.
      */
-    public static final int PRECISION = 17;
+    static final int PRECISION = 53;
+
+    /**
+     * The approximate precision in decimal digits.
+     */
+    public static final int DECIMAL_PRECISION = 17;
 
     /**
      * The maximum display size of a DOUBLE.
@@ -52,14 +57,12 @@ public final class ValueDouble extends Value {
 
     @Override
     public Value add(Value v) {
-        ValueDouble v2 = (ValueDouble) v;
-        return get(value + v2.value);
+        return get(value + ((ValueDouble) v).value);
     }
 
     @Override
     public Value subtract(Value v) {
-        ValueDouble v2 = (ValueDouble) v;
-        return get(value - v2.value);
+        return get(value - ((ValueDouble) v).value);
     }
 
     @Override
@@ -69,12 +72,11 @@ public final class ValueDouble extends Value {
 
     @Override
     public Value multiply(Value v) {
-        ValueDouble v2 = (ValueDouble) v;
-        return get(value * v2.value);
+        return get(value * ((ValueDouble) v).value);
     }
 
     @Override
-    public Value divide(Value v, long divisorPrecision) {
+    public Value divide(Value v, TypeInfo quotientType) {
         ValueDouble v2 = (ValueDouble) v;
         if (v2.value == 0.0) {
             throw DbException.get(ErrorCode.DIVISION_BY_ZERO_1, getTraceSQL());
@@ -93,18 +95,22 @@ public final class ValueDouble extends Value {
 
     @Override
     public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        if (value == Double.POSITIVE_INFINITY) {
-            builder.append("POWER(0, -1)");
-        } else if (value == Double.NEGATIVE_INFINITY) {
-            builder.append("(-POWER(0, -1))");
-        } else if (Double.isNaN(value)) {
-            builder.append("SQRT(-1)");
-        } else if ((sqlFlags & NO_CASTS) == 0) {
-            builder.append("CAST(").append(value).append(" AS DOUBLE PRECISION)");
-        } else {
-            builder.append(value);
+        if ((sqlFlags & NO_CASTS) == 0) {
+            return getSQL(builder.append("CAST(")).append(" AS DOUBLE PRECISION)");
         }
-        return builder;
+        return getSQL(builder);
+    }
+
+    private StringBuilder getSQL(StringBuilder builder) {
+        if (value == Double.POSITIVE_INFINITY) {
+            return builder.append("'Infinity'");
+        } else if (value == Double.NEGATIVE_INFINITY) {
+            return builder.append("'-Infinity'");
+        } else if (Double.isNaN(value)) {
+            return builder.append("'NaN'");
+        } else {
+            return builder.append(value);
+        }
     }
 
     @Override
@@ -124,21 +130,26 @@ public final class ValueDouble extends Value {
 
     @Override
     public int getSignum() {
-        return value == 0 ? 0 : (value < 0 ? -1 : 1);
+        return value == 0 || Double.isNaN(value) ? 0 : value < 0 ? -1 : 1;
+    }
+
+    @Override
+    public BigDecimal getBigDecimal() {
+        if (Double.isFinite(value)) {
+            return BigDecimal.valueOf(value);
+        }
+        // Infinite or NaN
+        throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, Double.toString(value));
+    }
+
+    @Override
+    public float getFloat() {
+        return (float) value;
     }
 
     @Override
     public double getDouble() {
         return value;
-    }
-
-    @Override
-    public BigDecimal getBigDecimal() {
-        if (Math.abs(value) <= Double.MAX_VALUE) {
-            return BigDecimal.valueOf(value);
-        }
-        // Infinite or NaN
-        throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, Double.toString(value));
     }
 
     @Override
@@ -154,11 +165,6 @@ public final class ValueDouble extends Value {
          */
         long hash = Double.doubleToRawLongBits(value);
         return (int) (hash ^ (hash >>> 32));
-    }
-
-    @Override
-    public Object getObject() {
-        return value;
     }
 
     /**

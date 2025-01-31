@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -18,7 +18,6 @@ import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.h2.api.ErrorCode;
 import org.h2.command.query.Select;
-import org.h2.result.SortOrder;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 import org.h2.tools.SimpleResultSet;
@@ -64,6 +63,7 @@ public class TestIndex extends TestDb {
         testRandomized();
         testDescIndex();
         testHashIndex();
+        testCompoundIndex_4161();
 
         if (config.networked && config.big) {
             return;
@@ -165,10 +165,10 @@ public class TestIndex extends TestDb {
         stat.execute("create table test(id int, name int primary key)");
         testErrorMessage("PRIMARY", "KEY", " ON PUBLIC.TEST(NAME)");
         stat.execute("create table test(id int, name int, unique(name))");
-        testErrorMessage("CONSTRAINT_INDEX_2 ON PUBLIC.TEST(NAME)");
+        testErrorMessage("CONSTRAINT_2 INDEX PUBLIC.CONSTRAINT_INDEX_2 ON PUBLIC.TEST(NAME NULLS FIRST)");
         stat.execute("create table test(id int, name int, " +
                 "constraint abc unique(name, id))");
-        testErrorMessage("ABC_INDEX_2 ON PUBLIC.TEST(NAME, ID)");
+        testErrorMessage("ABC INDEX PUBLIC.ABC_INDEX_2 ON PUBLIC.TEST(NAME NULLS FIRST, ID NULLS FIRST)");
     }
 
     private void testErrorMessage(String... expected) throws SQLException {
@@ -201,13 +201,13 @@ public class TestIndex extends TestDb {
             // The format of the VALUES clause varies a little depending on the
             // type of the index, so just test that we're getting useful info
             // back.
-            assertContains(m, "IDX_TEST_NAME ON PUBLIC.TEST(NAME)");
+            assertContains(m, "IDX_TEST_NAME ON PUBLIC.TEST(NAME NULLS FIRST)");
             assertContains(m, "'Hello'");
         }
         stat.execute("drop table test");
     }
 
-    private class ConcurrentUpdateThread extends Thread {
+    private static class ConcurrentUpdateThread extends Thread {
         private final AtomicInteger concurrentUpdateId, concurrentUpdateValue;
 
         private final PreparedStatement psInsert, psDelete;
@@ -370,7 +370,7 @@ public class TestIndex extends TestDb {
         Random rand = new Random(1);
         reconnect();
         stat.execute("drop all objects");
-        stat.execute("CREATE TABLE TEST(ID identity)");
+        stat.execute("CREATE TABLE TEST(ID identity default on null)");
         int len = getSize(100, 1000);
         for (int i = 0; i < len; i++) {
             switch (rand.nextInt(4)) {
@@ -461,7 +461,6 @@ public class TestIndex extends TestDb {
         rs = conn.getMetaData().getIndexInfo(null, null, "TEST", false, false);
         rs.next();
         assertEquals("D", rs.getString("ASC_OR_DESC"));
-        assertEquals(SortOrder.DESCENDING, rs.getInt("SORT_TYPE"));
         stat.execute("INSERT INTO TEST SELECT X FROM SYSTEM_RANGE(1, 30)");
         rs = stat.executeQuery(
                 "SELECT COUNT(*) FROM TEST WHERE ID BETWEEN 10 AND 20");
@@ -471,7 +470,6 @@ public class TestIndex extends TestDb {
         rs = conn.getMetaData().getIndexInfo(null, null, "TEST", false, false);
         rs.next();
         assertEquals("D", rs.getString("ASC_OR_DESC"));
-        assertEquals(SortOrder.DESCENDING, rs.getInt("SORT_TYPE"));
         rs = stat.executeQuery(
                 "SELECT COUNT(*) FROM TEST WHERE ID BETWEEN 10 AND 20");
         rs.next();
@@ -745,7 +743,7 @@ public class TestIndex extends TestDb {
 
     private void testFunctionIndex() throws SQLException {
         testFunctionIndexCounter = 0;
-        stat.execute("CREATE ALIAS TEST_INDEX FOR \"" + TestIndex.class.getName() + ".testFunctionIndexFunction\"");
+        stat.execute("CREATE ALIAS TEST_INDEX FOR '" + TestIndex.class.getName() + ".testFunctionIndexFunction'");
         try (ResultSet rs = stat.executeQuery("SELECT * FROM TEST_INDEX() WHERE ID = 1 OR ID = 3")) {
             assertTrue(rs.next());
             assertEquals(1, rs.getInt(1));
@@ -778,6 +776,32 @@ public class TestIndex extends TestDb {
 
         stat.execute("DELETE FROM TEST WHERE V = 'A'");
         stat.execute("DROP TABLE TEST");
+
+        conn.close();
+        deleteDb("index");
+    }
+
+    // Pick the better index when there are two competing indexes that both cover the required columns
+    //
+    // https://github.com/h2database/h2database/issues/4161
+    private void testCompoundIndex_4161() throws SQLException {
+        Connection conn = getConnection("index");
+        stat = conn.createStatement();
+        stat.execute("CREATE TABLE tbl ( c1 INTEGER, c2 INTEGER, c3 INTEGER, c4 INTEGER, c5 INTEGER, c6 INTEGER,"
+                + " c7 INTEGER );");
+        stat.execute("insert into tbl select x, 0, 0, 0, 0, 0, 0 from system_range(1, 1000)");
+
+        stat.execute("CREATE INDEX idx1 ON tbl ( c1, c2, c3, c4, c5 )");
+        ResultSet rs = stat.executeQuery(
+                "EXPLAIN ANALYZE UPDATE tbl SET c6=6 WHERE c1=1 AND c2=2 AND c3=3 AND c4=4 AND c5=5");
+        assertTrue(rs.next());
+        assertContains(rs.getString(1), "PUBLIC.IDX1: C1 = 1");
+
+        stat.execute("CREATE INDEX idx2 ON tbl ( c1, c7 )");
+        rs = stat.executeQuery(
+                "EXPLAIN ANALYZE UPDATE tbl SET c6=6 WHERE c1=1 AND c2=2 AND c3=3 AND c4=4 AND c5=5");
+        assertTrue(rs.next());
+        assertContains(rs.getString(1), "PUBLIC.IDX1: C1 = 1");
 
         conn.close();
         deleteDb("index");

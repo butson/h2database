@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.command.dml;
 
-import java.util.ArrayList;
+import java.util.List;
 
 /**
  * The list of setting for a SET statement.
@@ -103,14 +103,9 @@ public class SetTypes {
     public static final int DB_CLOSE_DELAY = LOCK_MODE + 1;
 
     /**
-     * The type of a SET LOG statement.
-     */
-    public static final int LOG = DB_CLOSE_DELAY + 1;
-
-    /**
      * The type of a SET THROTTLE statement.
      */
-    public static final int THROTTLE = LOG + 1;
+    public static final int THROTTLE = DB_CLOSE_DELAY + 1;
 
     /**
      * The type of a SET MAX_MEMORY_UNDO statement.
@@ -123,14 +118,9 @@ public class SetTypes {
     public static final int MAX_LENGTH_INPLACE_LOB = MAX_MEMORY_UNDO + 1;
 
     /**
-     * The type of a SET COMPRESS_LOB statement.
-     */
-    public static final int COMPRESS_LOB = MAX_LENGTH_INPLACE_LOB + 1;
-
-    /**
      * The type of a SET ALLOW_LITERALS statement.
      */
-    public static final int ALLOW_LITERALS = COMPRESS_LOB + 1;
+    public static final int ALLOW_LITERALS = MAX_LENGTH_INPLACE_LOB + 1;
 
     /**
      * The type of a SET SCHEMA statement.
@@ -148,14 +138,9 @@ public class SetTypes {
     public static final int SCHEMA_SEARCH_PATH = OPTIMIZE_REUSE_RESULTS + 1;
 
     /**
-     * The type of a SET UNDO_LOG statement.
-     */
-    public static final int UNDO_LOG = SCHEMA_SEARCH_PATH + 1;
-
-    /**
      * The type of a SET REFERENTIAL_INTEGRITY statement.
      */
-    public static final int REFERENTIAL_INTEGRITY = UNDO_LOG + 1;
+    public static final int REFERENTIAL_INTEGRITY = SCHEMA_SEARCH_PATH + 1;
 
     /**
      * The type of a SET MAX_OPERATION_MEMORY statement.
@@ -188,14 +173,9 @@ public class SetTypes {
     public static final int REDO_LOG_BINARY = QUERY_TIMEOUT + 1;
 
     /**
-     * The type of a SET BINARY_COLLATION statement.
-     */
-    public static final int BINARY_COLLATION = REDO_LOG_BINARY + 1;
-
-    /**
      * The type of a SET JAVA_OBJECT_SERIALIZER statement.
      */
-    public static final int JAVA_OBJECT_SERIALIZER = BINARY_COLLATION + 1;
+    public static final int JAVA_OBJECT_SERIALIZER = REDO_LOG_BINARY + 1;
 
     /**
      * The type of a SET RETENTION_TIME statement.
@@ -213,14 +193,9 @@ public class SetTypes {
     public static final int QUERY_STATISTICS_MAX_ENTRIES = QUERY_STATISTICS + 1;
 
     /**
-     * The type of SET FORCE_JOIN_ORDER statement.
-     */
-    public static final int FORCE_JOIN_ORDER = QUERY_STATISTICS_MAX_ENTRIES + 1;
-
-    /**
      * The type of SET LAZY_QUERY_EXECUTION statement.
      */
-    public static final int LAZY_QUERY_EXECUTION = FORCE_JOIN_ORDER + 1;
+    public static final int LAZY_QUERY_EXECUTION = QUERY_STATISTICS_MAX_ENTRIES + 1;
 
     /**
      * The type of SET BUILTIN_ALIAS_OVERRIDE statement.
@@ -233,14 +208,9 @@ public class SetTypes {
     public static final int AUTHENTICATOR = BUILTIN_ALIAS_OVERRIDE + 1;
 
     /**
-     * The type of a SET UUID_COLLATION statement.
-     */
-    public static final int UUID_COLLATION = AUTHENTICATOR + 1;
-
-    /**
      * The type of a SET IGNORE_CATALOGS statement.
      */
-    public static final int IGNORE_CATALOGS = UUID_COLLATION + 1;
+    public static final int IGNORE_CATALOGS = AUTHENTICATOR + 1;
 
     /**
      * The type of a SET CATALOG statement.
@@ -262,67 +232,73 @@ public class SetTypes {
      */
     public static final int VARIABLE_BINARY = TIME_ZONE + 1;
 
-    private static final int COUNT = VARIABLE_BINARY + 1;
+    /**
+     * The type of a SET DEFAULT_NULL_ORDERING statement.
+     */
+    public static final int DEFAULT_NULL_ORDERING = VARIABLE_BINARY + 1;
 
-    private static final ArrayList<String> TYPES;
+    /**
+     * The type of a SET TRUNCATE_LARGE_LENGTH statement.
+     */
+    public static final int TRUNCATE_LARGE_LENGTH = DEFAULT_NULL_ORDERING + 1;
+
+    private static final int COUNT = TRUNCATE_LARGE_LENGTH + 1;
+
+    private static final List<String> TYPES;
 
     private SetTypes() {
         // utility class
     }
 
     static {
-        ArrayList<String> list = new ArrayList<>(COUNT);
-        list.add("IGNORECASE");
-        list.add("MAX_LOG_SIZE");
-        list.add("MODE");
-        list.add("READONLY");
-        list.add("LOCK_TIMEOUT");
-        list.add("DEFAULT_LOCK_TIMEOUT");
-        list.add("DEFAULT_TABLE_TYPE");
-        list.add("CACHE_SIZE");
-        list.add("TRACE_LEVEL_SYSTEM_OUT");
-        list.add("TRACE_LEVEL_FILE");
-        list.add("TRACE_MAX_FILE_SIZE");
-        list.add("COLLATION");
-        list.add("CLUSTER");
-        list.add("WRITE_DELAY");
-        list.add("DATABASE_EVENT_LISTENER");
-        list.add("MAX_MEMORY_ROWS");
-        list.add("LOCK_MODE");
-        list.add("DB_CLOSE_DELAY");
-        list.add("LOG");
-        list.add("THROTTLE");
-        list.add("MAX_MEMORY_UNDO");
-        list.add("MAX_LENGTH_INPLACE_LOB");
-        list.add("COMPRESS_LOB");
-        list.add("ALLOW_LITERALS");
-        list.add("SCHEMA");
-        list.add("OPTIMIZE_REUSE_RESULTS");
-        list.add("SCHEMA_SEARCH_PATH");
-        list.add("UNDO_LOG");
-        list.add("REFERENTIAL_INTEGRITY");
-        list.add("MAX_OPERATION_MEMORY");
-        list.add("EXCLUSIVE");
-        list.add("CREATE_BUILD");
-        list.add("@");
-        list.add("QUERY_TIMEOUT");
-        list.add("REDO_LOG_BINARY");
-        list.add("BINARY_COLLATION");
-        list.add("JAVA_OBJECT_SERIALIZER");
-        list.add("RETENTION_TIME");
-        list.add("QUERY_STATISTICS");
-        list.add("QUERY_STATISTICS_MAX_ENTRIES");
-        list.add("FORCE_JOIN_ORDER");
-        list.add("LAZY_QUERY_EXECUTION");
-        list.add("BUILTIN_ALIAS_OVERRIDE");
-        list.add("AUTHENTICATOR");
-        list.add("UUID_COLLATION");
-        list.add("IGNORE_CATALOGS");
-        list.add("CATALOG");
-        list.add("NON_KEYWORDS");
-        list.add("TIME ZONE");
-        list.add("VARIABLE_BINARY");
-        TYPES = list;
+        TYPES = List.of( //
+                "IGNORECASE", //
+                "MAX_LOG_SIZE", //
+                "MODE", //
+                "READONLY", //
+                "LOCK_TIMEOUT", //
+                "DEFAULT_LOCK_TIMEOUT", //
+                "DEFAULT_TABLE_TYPE", //
+                "CACHE_SIZE", //
+                "TRACE_LEVEL_SYSTEM_OUT", //
+                "TRACE_LEVEL_FILE", //
+                "TRACE_MAX_FILE_SIZE", //
+                "COLLATION", //
+                "CLUSTER", //
+                "WRITE_DELAY", //
+                "DATABASE_EVENT_LISTENER", //
+                "MAX_MEMORY_ROWS", //
+                "LOCK_MODE", //
+                "DB_CLOSE_DELAY", //
+                "THROTTLE", //
+                "MAX_MEMORY_UNDO", //
+                "MAX_LENGTH_INPLACE_LOB", //
+                "ALLOW_LITERALS", //
+                "SCHEMA", //
+                "OPTIMIZE_REUSE_RESULTS", //
+                "SCHEMA_SEARCH_PATH", //
+                "REFERENTIAL_INTEGRITY", //
+                "MAX_OPERATION_MEMORY", //
+                "EXCLUSIVE", //
+                "CREATE_BUILD", //
+                "@", //
+                "QUERY_TIMEOUT", //
+                "REDO_LOG_BINARY", //
+                "JAVA_OBJECT_SERIALIZER", //
+                "RETENTION_TIME", //
+                "QUERY_STATISTICS", //
+                "QUERY_STATISTICS_MAX_ENTRIES", //
+                "LAZY_QUERY_EXECUTION", //
+                "BUILTIN_ALIAS_OVERRIDE", //
+                "AUTHENTICATOR", //
+                "IGNORE_CATALOGS", //
+                "CATALOG", //
+                "NON_KEYWORDS", //
+                "TIME ZONE", //
+                "VARIABLE_BINARY", //
+                "DEFAULT_NULL_ORDERING", //
+                "TRUNCATE_LARGE_LENGTH");
+        assert TYPES.size() == COUNT;
     }
 
     /**
@@ -335,7 +311,7 @@ public class SetTypes {
         return TYPES.indexOf(name);
     }
 
-    public static ArrayList<String> getTypes() {
+    public static List<String> getTypes() {
         return TYPES;
     }
 

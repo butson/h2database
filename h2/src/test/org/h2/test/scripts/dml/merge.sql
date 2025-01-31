@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -149,4 +149,34 @@ MERGE INTO TEST KEY(A) VALUES (1, DEFAULT);
 > update count: 1
 
 DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(ID INT, G INT GENERATED ALWAYS AS (ID + 1));
+> ok
+
+MERGE INTO TEST(G) KEY(ID) VALUES (1);
+> exception SYNTAX_ERROR_2
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE T(ID BOOLEAN PRIMARY KEY);
+> ok
+
+INSERT INTO T(ID) VALUES (TRUE);
+> update count: 1
+
+MERGE INTO T(ID) VALUES 2;
+> exception TYPES_ARE_NOT_COMPARABLE_2
+
+SET MODE MySQL;
+> ok
+
+MERGE INTO T(ID) VALUES 2;
+> update count: 1
+
+SET MODE Regular;
+> ok
+
+DROP TABLE T;
 > ok

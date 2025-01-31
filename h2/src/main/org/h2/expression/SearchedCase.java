@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 import org.h2.value.ValueNull;
@@ -13,7 +13,7 @@ import org.h2.value.ValueNull;
 /**
  * A searched case.
  */
-public class SearchedCase extends OperationN {
+public final class SearchedCase extends OperationN {
 
     public SearchedCase() {
         super(new Expression[4]);
@@ -24,7 +24,7 @@ public class SearchedCase extends OperationN {
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         int len = args.length - 1;
         for (int i = 0; i < len; i += 2) {
             if (args[i].getBooleanValue(session)) {
@@ -38,7 +38,7 @@ public class SearchedCase extends OperationN {
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         TypeInfo typeInfo = TypeInfo.TYPE_UNKNOWN;
         int len = args.length - 1;
         boolean allConst = true;
@@ -76,18 +76,18 @@ public class SearchedCase extends OperationN {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
         builder.append("CASE");
         int len = args.length - 1;
         for (int i = 0; i < len; i += 2) {
             builder.append(" WHEN ");
-            args[i].getSQL(builder, sqlFlags);
+            args[i].getUnenclosedSQL(builder, sqlFlags);
             builder.append(" THEN ");
-            args[i + 1].getSQL(builder, sqlFlags);
+            args[i + 1].getUnenclosedSQL(builder, sqlFlags);
         }
         if ((len & 1) == 0) {
             builder.append(" ELSE ");
-            args[len].getSQL(builder, sqlFlags);
+            args[len].getUnenclosedSQL(builder, sqlFlags);
         }
         return builder.append(" END");
     }

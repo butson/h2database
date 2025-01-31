@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -14,6 +14,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
@@ -25,17 +26,17 @@ import java.util.List;
 import org.h2.bnf.Bnf;
 import org.h2.engine.Constants;
 import org.h2.server.web.PageParser;
-import org.h2.util.JdbcUtils;
+import org.h2.tools.Csv;
 import org.h2.util.StringUtils;
 
 /**
  * This application generates sections of the documentation
- * by converting the built-in help section (INFORMATION_SCHEMA.HELP)
+ * by converting the built-in help section
  * to cross linked html.
  */
 public class GenerateDoc {
 
-    private static final String IN_HELP = "src/docsrc/help/help.csv";
+    private static final String IN_HELP = "src/main/org/h2/res/help.csv";
     private Path inDir = Paths.get("src/docsrc/html");
     private Path outDir = Paths.get("docs/html");
     private Connection conn;
@@ -69,9 +70,8 @@ public class GenerateDoc {
         bnf.linkStatements();
         session.put("version", Constants.VERSION);
         session.put("versionDate", Constants.BUILD_DATE);
-        session.put("stableVersion", Constants.VERSION_STABLE);
-        session.put("stableVersionDate", Constants.BUILD_DATE_STABLE);
-        // String help = "SELECT * FROM INFORMATION_SCHEMA.HELP WHERE SECTION";
+        session.put("downloadRoot",
+                "https://github.com/h2database/h2database/releases/download/version-" + Constants.VERSION);
         String help = "SELECT ROWNUM ID, * FROM CSVREAD('" +
                 IN_HELP + "', NULL, 'lineComment=#') WHERE SECTION ";
         map("commandsDML",
@@ -97,9 +97,13 @@ public class GenerateDoc {
                 help + "= 'Functions (System)' ORDER BY ID", true, false);
         map("functionsJson",
                 help + "= 'Functions (JSON)' ORDER BY ID", true, false);
+        map("functionsTable",
+                help + "= 'Functions (Table)' ORDER BY ID", true, false);
 
         map("aggregateFunctionsGeneral",
                 help + "= 'Aggregate Functions (General)' ORDER BY ID", true, false);
+        map("aggregateFunctionsBinarySet",
+                help + "= 'Aggregate Functions (Binary Set)' ORDER BY ID", true, false);
         map("aggregateFunctionsOrdered",
                 help + "= 'Aggregate Functions (Ordered)' ORDER BY ID", true, false);
         map("aggregateFunctionsHypothetical",
@@ -124,12 +128,72 @@ public class GenerateDoc {
                 help + "LIKE 'Data Types%' ORDER BY SECTION, ID", true, true);
         map("intervalDataTypes",
                 help + "LIKE 'Interval Data Types%' ORDER BY SECTION, ID", true, true);
-        map("informationSchema", "SELECT TABLE_NAME TOPIC, " +
-                "GROUP_CONCAT(COLUMN_NAME " +
-                "ORDER BY ORDINAL_POSITION SEPARATOR ', ') SYNTAX " +
-                "FROM INFORMATION_SCHEMA.COLUMNS " +
-                "WHERE TABLE_SCHEMA='INFORMATION_SCHEMA' " +
-                "GROUP BY TABLE_NAME ORDER BY TABLE_NAME", false, false);
+        HashMap<String, String> informationSchemaTables = new HashMap<>();
+        HashMap<String, String> informationSchemaColumns = new HashMap<>(512);
+        Csv csv = new Csv();
+        csv.setLineCommentCharacter('#');
+        try (ResultSet rs = csv.read("src/docsrc/help/information_schema.csv", null, null)) {
+            while (rs.next()) {
+                String tableName = rs.getString(1);
+                String columnName = rs.getString(2);
+                String description = rs.getString(3);
+                if (columnName != null) {
+                    informationSchemaColumns.put(tableName == null ? columnName : tableName + '.' + columnName,
+                            description);
+                } else {
+                    informationSchemaTables.put(tableName, description);
+                }
+            }
+        }
+        int errorCount = 0;
+        try (Statement stat = conn.createStatement();
+                PreparedStatement prep = conn.prepareStatement("SELECT COLUMN_NAME, "
+                        + "DATA_TYPE_SQL('INFORMATION_SCHEMA', TABLE_NAME, 'TABLE', DTD_IDENTIFIER) DT "
+                        + "FROM INFORMATION_SCHEMA.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = 'INFORMATION_SCHEMA' AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION")) {
+            ResultSet rs = stat.executeQuery("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                    + "WHERE TABLE_SCHEMA = 'INFORMATION_SCHEMA' ORDER BY TABLE_NAME");
+
+            ArrayList<HashMap<String, String>> list = new ArrayList<>();
+            StringBuilder builder = new StringBuilder();
+            while (rs.next()) {
+                HashMap<String, String> map = new HashMap<>(8);
+                String table = rs.getString(1);
+                map.put("table", table);
+                map.put("link", "information_schema_" + StringUtils.urlEncode(table.toLowerCase()));
+                String description = informationSchemaTables.get(table);
+                if (description == null) {
+                    System.out.println("No documentation for INFORMATION_SCHEMA." + table);
+                    errorCount++;
+                    description = "";
+                }
+                map.put("description", StringUtils.xmlText(description));
+                prep.setString(1, table);
+                ResultSet rs2 = prep.executeQuery();
+                builder.setLength(0);
+                while (rs2.next()) {
+                    if (rs2.getRow() > 1) {
+                        builder.append('\n');
+                    }
+                    String column = rs2.getString(1);
+                    description = informationSchemaColumns.get(table + '.' + column);
+                    if (description == null) {
+                        description = informationSchemaColumns.get(column);
+                        if (description == null) {
+                            System.out.println("No documentation for INFORMATION_SCHEMA." + table + '.' + column);
+                            errorCount++;
+                            description = "";
+                        }
+                    }
+                    builder.append("<tr><td>").append(column).append("</td><td>").append(rs2.getString(2))
+                            .append("</td></tr><tr><td colspan=\"2\">")
+                            .append(StringUtils.xmlText(description)).append("</td></tr>");
+                }
+                map.put("columns", builder.toString());
+                list.add(map);
+            }
+            putToMap("informationSchema", list);
+        }
         Files.walkFileTree(inDir, new SimpleFileVisitor<Path>() {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
@@ -138,12 +202,15 @@ public class GenerateDoc {
             }
         });
         conn.close();
+        if (errorCount > 0) {
+            throw new IOException(errorCount + (errorCount == 1 ? " error" : " errors") +  " found");
+        }
     }
 
     /**
      * Process a file.
      *
-     * @param file the file
+     * @param inFile the file
      */
     void process(Path inFile) throws IOException {
         Path outFile = outDir.resolve(inDir.relativize(inFile));
@@ -159,11 +226,8 @@ public class GenerateDoc {
 
     private void map(String key, String sql, boolean railroads, boolean forDataTypes)
             throws Exception {
-        ResultSet rs = null;
-        Statement stat = null;
-        try {
-            stat = conn.createStatement();
-            rs = stat.executeQuery(sql);
+        try (Statement stat = conn.createStatement();
+                ResultSet rs = stat.executeQuery(sql)) {
             ArrayList<HashMap<String, String>> list =
                     new ArrayList<>();
             while (rs.next()) {
@@ -211,18 +275,19 @@ public class GenerateDoc {
 
                 list.add(map);
             }
-            session.put(key, list);
-            int div = 3;
-            int part = (list.size() + div - 1) / div;
-            for (int i = 0, start = 0; i < div; i++, start += part) {
-                int end = Math.min(start + part, list.size());
-                List<HashMap<String, String>> listThird = start <= end ? list.subList(start, end)
-                        : Collections.emptyList();
-                session.put(key + "-" + i, listThird);
-            }
-        } finally {
-            JdbcUtils.closeSilently(rs);
-            JdbcUtils.closeSilently(stat);
+            putToMap(key, list);
+        }
+    }
+
+    private void putToMap(String key, ArrayList<HashMap<String, String>> list) {
+        session.put(key, list);
+        int div = 3;
+        int part = (list.size() + div - 1) / div;
+        for (int i = 0, start = 0; i < div; i++, start += part) {
+            int end = Math.min(start + part, list.size());
+            List<HashMap<String, String>> listThird = start <= end ? list.subList(start, end)
+                    : Collections.emptyList();
+            session.put(key + '-' + i, listThird);
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,7 +7,7 @@ package org.h2.constraint;
 
 import java.util.HashSet;
 import org.h2.api.ErrorCode;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionVisitor;
 import org.h2.index.Index;
@@ -20,7 +20,6 @@ import org.h2.table.Table;
 import org.h2.table.TableFilter;
 import org.h2.util.StringUtils;
 import org.h2.value.Value;
-import org.h2.value.ValueNull;
 
 /**
  * A check constraint.
@@ -51,16 +50,13 @@ public class ConstraintCheck extends Constraint {
     public String getCreateSQLForCopy(Table forTable, String quotedName) {
         StringBuilder buff = new StringBuilder("ALTER TABLE ");
         forTable.getSQL(buff, DEFAULT_SQL_FLAGS).append(" ADD CONSTRAINT ");
-        if (forTable.isHidden()) {
-            buff.append("IF NOT EXISTS ");
-        }
         buff.append(quotedName);
         if (comment != null) {
             buff.append(" COMMENT ");
             StringUtils.quoteStringSQL(buff, comment);
         }
-        buff.append(" CHECK(");
-        expr.getUnenclosedSQL(buff, DEFAULT_SQL_FLAGS).append(") NOCHECK");
+        buff.append(" CHECK");
+        expr.getEnclosedSQL(buff, DEFAULT_SQL_FLAGS).append(" NOCHECK");
         return buff.toString();
     }
 
@@ -81,7 +77,7 @@ public class ConstraintCheck extends Constraint {
     }
 
     @Override
-    public void removeChildrenAndResources(Session session) {
+    public void removeChildrenAndResources(SessionLocal session) {
         table.removeConstraint(this);
         database.removeMeta(session, getId());
         filter = null;
@@ -91,7 +87,7 @@ public class ConstraintCheck extends Constraint {
     }
 
     @Override
-    public void checkRow(Session session, Table t, Row oldRow, Row newRow) {
+    public void checkRow(SessionLocal session, Table t, Row oldRow, Row newRow) {
         if (newRow == null) {
             return;
         }
@@ -103,14 +99,12 @@ public class ConstraintCheck extends Constraint {
                 v = expr.getValue(session);
             }
             // Both TRUE and NULL are ok
-            b = v == ValueNull.INSTANCE || v.getBoolean();
+            b = v.isFalse();
         } catch (DbException ex) {
-            throw DbException.get(ErrorCode.CHECK_CONSTRAINT_INVALID, ex,
-                    getShortDescription());
+            throw DbException.get(ErrorCode.CHECK_CONSTRAINT_INVALID, ex, getShortDescription());
         }
-        if (!b) {
-            throw DbException.get(ErrorCode.CHECK_CONSTRAINT_VIOLATED_1,
-                    getShortDescription());
+        if (b) {
+            throw DbException.get(ErrorCode.CHECK_CONSTRAINT_VIOLATED_1, getShortDescription());
         }
     }
 
@@ -121,7 +115,7 @@ public class ConstraintCheck extends Constraint {
 
     @Override
     public void setIndexOwner(Index index) {
-        DbException.throwInternalError(toString());
+        throw DbException.getInternalError(toString());
     }
 
     @Override
@@ -142,14 +136,14 @@ public class ConstraintCheck extends Constraint {
     }
 
     @Override
-    public void checkExistingData(Session session) {
+    public void checkExistingData(SessionLocal session) {
         if (session.getDatabase().isStarting()) {
             // don't check at startup
             return;
         }
-        StringBuilder builder = new StringBuilder().append("SELECT 1 FROM ");
-        filter.getTable().getSQL(builder, DEFAULT_SQL_FLAGS).append(" WHERE NOT(");
-        expr.getSQL(builder, DEFAULT_SQL_FLAGS).append(')');
+        StringBuilder builder = new StringBuilder().append("SELECT NULL FROM ");
+        filter.getTable().getSQL(builder, DEFAULT_SQL_FLAGS).append(" WHERE NOT ");
+        expr.getSQL(builder, DEFAULT_SQL_FLAGS, Expression.AUTO_PARENTHESES);
         String sql = builder.toString();
         ResultInterface r = session.prepare(sql).query(1);
         if (r.next()) {

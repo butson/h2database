@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,6 +13,7 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Random;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
@@ -64,6 +65,7 @@ public class TestOptimizations extends TestDb {
         testInSelectJoin();
         testMinMaxNullOptimization();
         testUseCoveringIndex();
+        testInPredicate();
         // testUseIndexWhenAllColumnsNotInOrderBy();
         if (config.networked) {
             return;
@@ -114,8 +116,8 @@ public class TestOptimizations extends TestDb {
 
     private void testExplainRoundTrip() throws Exception {
         Connection conn = getConnection("optimizations");
-        assertExplainRoundTrip(conn,
-                "SELECT \"X\" FROM SYSTEM_RANGE(1, 1) WHERE \"X\" > ANY(SELECT \"X\" FROM SYSTEM_RANGE(1, 1))");
+        assertExplainRoundTrip(conn, "SELECT \"X\" FROM SYSTEM_RANGE(1, 1)"
+                + " WHERE \"X\" > ANY(SELECT DISTINCT \"X\" FROM SYSTEM_RANGE(1, 1))");
         conn.close();
     }
 
@@ -287,7 +289,8 @@ public class TestOptimizations extends TestDb {
         stat.execute("insert into test(data) values('World')");
         stat.execute("insert into test(_rowid_, data) values(20, 'Hello')");
         stat.execute(
-                "merge into test(_rowid_, data) key(_rowid_) values(20, 'Hallo')");
+                "merge into test using (values(20, 'Hallo')) s(id, data) on test._rowid_ = s.id"
+                + " when matched then update set data = s.data");
         rs = stat.executeQuery(
                 "select _rowid_, data from test order by _rowid_");
         rs.next();
@@ -338,7 +341,6 @@ public class TestOptimizations extends TestDb {
         Statement stat = conn.createStatement();
         stat.execute("drop table test if exists");
         stat.execute("create table test(id int)");
-        stat.execute("create index idx_id_desc on test(id desc)");
         stat.execute("create index idx_id_asc on test(id)");
         ResultSet rs;
 
@@ -350,7 +352,7 @@ public class TestOptimizations extends TestDb {
         rs = stat.executeQuery("explain select * from test " +
                 "where id < 10 order by id desc");
         rs.next();
-        assertContains(rs.getString(1), "IDX_ID_DESC");
+        assertContains(rs.getString(1), "IDX_ID_ASC");
 
         rs.next();
         stat.execute("drop table test");
@@ -361,8 +363,8 @@ public class TestOptimizations extends TestDb {
         deleteDb("optimizations");
         Connection conn = getConnection("optimizations");
         Statement stat = conn.createStatement();
-        ResultSet rs = stat.executeQuery("select `value` " +
-                "from information_schema.settings where name='analyzeAuto'");
+        ResultSet rs = stat.executeQuery(
+                "SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'analyzeAuto'");
         int auto = rs.next() ? rs.getInt(1) : 0;
         if (auto != 0) {
             stat.execute("create table test(id int)");
@@ -436,7 +438,7 @@ public class TestOptimizations extends TestDb {
         stat.execute("create table test(id int primary key, name varchar(255))");
         stat.execute("insert into test values(1, 'Hello'), (2, 'World')");
         assertSingleValue(stat,
-                "select count(*) from test where name in ('Hello', 'World', 1)", 2);
+                "select count(*) from test where name in ('Hello', 'World', '1')", 2);
         assertSingleValue(stat,
                 "select count(*) from test where name in ('Hello', 'World')", 2);
         assertSingleValue(stat,
@@ -579,9 +581,7 @@ public class TestOptimizations extends TestDb {
         Statement stat = conn.createStatement();
         stat.execute("create table item(id int primary key)");
         stat.execute("insert into item values(1)");
-        stat.execute("create alias opt for \"" +
-                getClass().getName() +
-                ".optimizeInJoinSelect\"");
+        stat.execute("create alias opt for '" + getClass().getName() + ".optimizeInJoinSelect'");
         PreparedStatement prep = conn.prepareStatement(
                 "select * from item where id in (select x from opt())");
         ResultSet rs = prep.executeQuery();
@@ -660,10 +660,6 @@ public class TestOptimizations extends TestDb {
             ResultSet rs = stat.executeQuery(
                     "explain select min(x), max(x) from test");
             rs.next();
-            if (!config.mvStore) {
-                String plan = rs.getString(1);
-                assertContains(plan, "direct");
-            }
             rs = stat.executeQuery("select min(x), max(x) from test");
             rs.next();
             int min = rs.getInt(1);
@@ -747,6 +743,11 @@ public class TestOptimizations extends TestDb {
         assertFalse(rs.next());
         rs = stat.executeQuery("SELECT DISTINCT TYPE FROM TEST " +
                 "ORDER BY TYPE");
+        for (int i = 0; rs.next(); i++) {
+            assertEquals(i, rs.getInt(1));
+        }
+        assertFalse(rs.next());
+        rs = stat.executeQuery("SELECT DISTINCT TYPE FROM TEST");
         for (int i = 0; rs.next(); i++) {
             assertEquals(i, rs.getInt(1));
         }
@@ -1142,8 +1143,9 @@ public class TestOptimizations extends TestDb {
                 "CONSTRAINT TABLE_A_UK UNIQUE (name) )");
         stat.execute("CREATE TABLE TABLE_B(id IDENTITY PRIMARY KEY NOT NULL,  " +
                 "TABLE_a_id BIGINT NOT NULL,  createDate TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, " +
-                "CONSTRAINT TABLE_B_UK UNIQUE (table_a_id, createDate), " +
-                "FOREIGN KEY (table_a_id) REFERENCES TABLE_A(id) )");
+                "CONSTRAINT TABLE_B_UK UNIQUE (table_a_id, createDate))");
+        stat.execute("CREATE INDEX TABLE_B_IDX ON TABLE_B(TABLE_A_ID)");
+        stat.execute("ALTER TABLE TABLE_B ADD FOREIGN KEY (table_a_id) REFERENCES TABLE_A(id)");
         stat.execute("INSERT INTO TABLE_A (name)  SELECT 'package_' || CAST(X as VARCHAR) " +
                 "FROM SYSTEM_RANGE(1, 100)  WHERE X <= 100");
         int count = config.memory ? 30_000 : 50_000;
@@ -1152,7 +1154,6 @@ public class TestOptimizations extends TestDb {
                 "FROM ( SELECT ROUND((RAND() * 100)) AS table_a_id, " +
                 "DATEADD('SECOND', X, CURRENT_TIMESTAMP) as createDate FROM SYSTEM_RANGE(1, " + count + ") " +
                 "WHERE X < " + count + "  )");
-        stat.execute("CREATE INDEX table_b_idx ON table_b(table_a_id, id)");
         stat.execute("ANALYZE");
 
         ResultSet rs = stat.executeQuery("EXPLAIN ANALYZE SELECT MAX(b.id) as id " +
@@ -1165,6 +1166,138 @@ public class TestOptimizations extends TestDb {
         rs.next();
         assertContains(rs.getString(1), "/* PUBLIC.TABLE_B_IDX");
         conn.close();
+    }
+
+    private void testInPredicate() throws SQLException {
+        deleteDb("optimizations");
+        Connection conn = getConnection("optimizations");
+        Statement stat = conn.createStatement();
+        stat.execute("CREATE TABLE Q_T(A INT) AS VALUES 1, 3, 4, 2");
+        stat.execute("CREATE TABLE Q_T_A(A INT, PRIMARY KEY(A ASC)) AS VALUES 1, 3, 4, 2");
+        stat.execute("CREATE TABLE Q_T_D(A INT, PRIMARY KEY(A DESC)) AS VALUES 1, 3, 4, 2");
+        stat.execute("CREATE TABLE V_T(V INT) AS VALUES 2, 1, 5, 4");
+        stat.execute("CREATE TABLE V_T_A(V INT, PRIMARY KEY(V ASC)) AS VALUES 2, 1, 5, 4");
+        stat.execute("CREATE TABLE V_T_D(V INT, PRIMARY KEY(V DESC)) AS VALUES 2, 1, 5, 4");
+        for (int q = 1; q <= 3; q++) {
+            for (int qOrder = 1; qOrder <= 3; qOrder++) {
+                testInPredicate(conn, stat, q, qOrder, 0, 1);
+                for (int v = 1; v <= 3; v++) {
+                    for (int vOrder = 1; vOrder <= 3; vOrder++) {
+                        testInPredicate(conn, stat, q, qOrder, v, vOrder);
+                    }
+                }
+            }
+        }
+        conn.close();
+    }
+
+    private void testInPredicate(Connection conn, Statement stat, int q, int qOrder, int v, int vOrder)
+            throws SQLException {
+        StringBuilder builder = new StringBuilder();
+        builder.append("SELECT * FROM ");
+        switch (q) {
+        case 1:
+            builder.append("Q_T");
+            break;
+        case 2:
+            builder.append("Q_T_A");
+            break;
+        case 3:
+            builder.append("Q_T_D");
+            break;
+        default:
+            fail();
+        }
+        builder.append(" WHERE A IN (");
+        switch (v) {
+        case 0:
+            builder.append("2, 1, 5, 4");
+            break;
+        case 1:
+            builder.append("SELECT * FROM V_T");
+            break;
+        case 2:
+            builder.append("SELECT * FROM V_T");
+            break;
+        case 3:
+            builder.append("SELECT * FROM V_T");
+            break;
+        default:
+            fail();
+        }
+        switch (vOrder) {
+        case 1:
+            break;
+        case 2:
+            if (v == 0) {
+                fail();
+            }
+            builder.append(" ORDER BY V ASC");
+            break;
+        case 3:
+            if (v == 0) {
+                fail();
+            }
+            builder.append(" ORDER BY V DESC");
+            break;
+        default:
+            fail();
+        }
+        builder.append(')');
+        switch (qOrder) {
+        case 1:
+            break;
+        case 2:
+            builder.append(" ORDER BY A ASC");
+            break;
+        case 3:
+            builder.append(" ORDER BY A DESC");
+            break;
+        default:
+            fail();
+        }
+        PreparedStatement prep = conn.prepareStatement(builder.toString());
+        ResultSet rs = prep.executeQuery();
+        switch (qOrder) {
+        case 1: {
+            HashSet<Integer> set = new HashSet<>();
+            for (int i = 0; i < 3; i++) {
+                assertTrue(rs.next());
+                set.add(rs.getInt(1));
+            }
+            assertFalse(rs.next());
+            assertTrue(set.contains(1));
+            assertTrue(set.contains(2));
+            assertTrue(set.contains(4));
+            break;
+        }
+        case 2:
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt(1));
+            assertTrue(rs.next());
+            assertEquals(2, rs.getInt(1));
+            assertTrue(rs.next());
+            assertEquals(4, rs.getInt(1));
+            assertFalse(rs.next());
+            break;
+        case 3:
+            assertTrue(rs.next());
+            assertEquals(4, rs.getInt(1));
+            assertTrue(rs.next());
+            assertEquals(2, rs.getInt(1));
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt(1));
+            assertFalse(rs.next());
+            break;
+        }
+        prep.close();
+        builder.insert(0, "EXPLAIN ");
+        rs = stat.executeQuery(builder.toString());
+        rs.next();
+        String plan = rs.getString(1);
+        boolean expectedQuerySorted = q > 1 && qOrder > 1;
+        boolean querySorted = plan.endsWith("/* index sorted */");
+        assertEquals(expectedQuerySorted, querySorted);
     }
 
     private void testConditionAndOrDistributiveLaw() throws SQLException {

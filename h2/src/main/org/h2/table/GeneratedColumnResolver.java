@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -57,14 +57,14 @@ class GeneratedColumnResolver implements ColumnResolver {
         Column[] allColumns = table.getColumns();
         int totalCount = allColumns.length, baseCount = totalCount;
         for (int i = 0; i < totalCount; i++) {
-            if (allColumns[i].getGenerated()) {
+            if (allColumns[i].isGenerated()) {
                 baseCount--;
             }
         }
         Column[] baseColumns = new Column[baseCount];
         for (int i = 0, j = 0; i < totalCount; i++) {
             Column c = allColumns[i];
-            if (!c.getGenerated()) {
+            if (!c.isGenerated()) {
                 baseColumns[j++] = c;
             }
         }

@@ -1,13 +1,12 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
 import org.h2.command.Prepared;
-import org.h2.engine.Session;
-import org.h2.message.DbException;
+import org.h2.engine.SessionLocal;
 import org.h2.schema.Sequence;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
@@ -15,7 +14,7 @@ import org.h2.value.Value;
 /**
  * Wraps a sequence when used in a statement.
  */
-public class SequenceValue extends Operation0 {
+public final class SequenceValue extends Operation0 {
 
     private final Sequence sequence;
 
@@ -50,17 +49,17 @@ public class SequenceValue extends Operation0 {
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         return current ? session.getCurrentValueFor(sequence) : session.getNextValueFor(sequence, prepared);
     }
 
     @Override
     public TypeInfo getType() {
-        return sequence.getDatabase().getMode().decimalSequences ? TypeInfo.TYPE_NUMERIC_BIGINT : TypeInfo.TYPE_BIGINT;
+        return sequence.getDataType();
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
         builder.append(current ? "CURRENT" : "NEXT").append(" VALUE FOR ");
         return sequence.getSQL(builder, sqlFlags);
     }
@@ -68,12 +67,6 @@ public class SequenceValue extends Operation0 {
     @Override
     public boolean isEverything(ExpressionVisitor visitor) {
         switch (visitor.getType()) {
-        case ExpressionVisitor.EVALUATABLE:
-        case ExpressionVisitor.OPTIMIZABLE_AGGREGATE:
-        case ExpressionVisitor.NOT_FROM_RESOLVER:
-        case ExpressionVisitor.GET_COLUMNS1:
-        case ExpressionVisitor.GET_COLUMNS2:
-            return true;
         case ExpressionVisitor.DETERMINISTIC:
         case ExpressionVisitor.INDEPENDENT:
         case ExpressionVisitor.QUERY_COMPARABLE:
@@ -87,7 +80,7 @@ public class SequenceValue extends Operation0 {
         case ExpressionVisitor.READONLY:
             return current;
         default:
-            throw DbException.throwInternalError("type=" + visitor.getType());
+            return true;
         }
     }
 

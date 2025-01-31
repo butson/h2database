@@ -1,14 +1,13 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.mvstore.type;
 
+import java.nio.ByteBuffer;
 import org.h2.mvstore.DataUtils;
 import org.h2.mvstore.WriteBuffer;
-
-import java.nio.ByteBuffer;
 
 /**
  * Class LongDataType.
@@ -24,7 +23,7 @@ public class LongDataType extends BasicDataType<Long> {
 
     private static final Long[] EMPTY_LONG_ARR = new Long[0];
 
-    public LongDataType() {}
+    private LongDataType() {}
 
     @Override
     public int getMemory(Long obj) {
@@ -79,6 +78,6 @@ public class LongDataType extends BasicDataType<Long> {
             }
             x = (low + high) >>> 1;
         }
-        return -(low + 1);
+        return ~low;
     }
 }

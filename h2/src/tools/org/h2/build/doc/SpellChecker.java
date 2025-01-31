@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -33,7 +33,7 @@ public class SpellChecker {
             "properties", "task", "MF", "mf", "sh", "" };
     private static final String[] IGNORE = { "dev", "nsi", "gif", "png", "odg",
             "ico", "sxd", "zip", "bz2", "rc", "layout", "res", "dll", "jar",
-            "svg", "prefs", "prop", "iml", "class" };
+            "svg", "prefs", "prop", "iml", "class", "json" };
     private static final String DELIMITERS =
             " \n.();-\"=,*/{}_<>+\r:'@[]&\\!#|?$^%~`\t";
     private static final String PREFIX_IGNORE = "abc";
@@ -184,10 +184,7 @@ public class SpellChecker {
                 System.out.println();
             }
         }
-        if (notFound.isEmpty()) {
-            return;
-        }
-        if (notFound.size() > 0) {
+        if (!notFound.isEmpty()) {
             System.out.println("file: " + fileName);
             for (String s : notFound) {
                 System.out.print(s + " ");

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,13 +13,18 @@ import java.sql.Statement;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+
+import javax.script.ScriptEngineManager;
+
 import org.h2.api.ErrorCode;
 import org.h2.api.Trigger;
-import org.h2.engine.Session;
-import org.h2.jdbc.JdbcConnection;
+import org.h2.message.DbException;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 import org.h2.tools.TriggerAdapter;
+import org.h2.util.StringUtils;
 import org.h2.util.Task;
 import org.h2.value.ValueBigint;
 
@@ -43,8 +48,8 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
     @Override
     public void test() throws Exception {
         deleteDb("trigger");
+        testWrongDataType();
         testTriggerDeadlock();
-        testDeleteInTrigger();
         testTriggerAdapter();
         testTriggerSelectEachRow();
         testViewTrigger();
@@ -57,6 +62,7 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
         testConstraints();
         testCheckConstraintErrorMessage();
         testMultiPartForeignKeys();
+        testConcurrent();
         deleteDb("trigger");
     }
 
@@ -68,6 +74,76 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
         public void fire(Connection conn, ResultSet oldRow, ResultSet newRow)
                 throws SQLException {
             conn.createStatement().execute("delete from test");
+        }
+    }
+
+    /**
+     * Trigger that sets value of the wrong data type.
+     */
+    public static class WrongTrigger implements Trigger {
+        @Override
+        public void fire(Connection conn, Object[] oldRow, Object[] newRow) throws SQLException {
+            newRow[1] = "Wrong value";
+        }
+    }
+
+    /**
+     * Trigger that sets value of the wrong data type.
+     */
+    public static class WrongTriggerAdapter extends TriggerAdapter {
+        @Override
+        public void fire(Connection conn, ResultSet oldRow, ResultSet newRow) throws SQLException {
+            newRow.updateString(2, "Wrong value");
+        }
+    }
+
+    /**
+     * Trigger that sets null value.
+     */
+    public static class NullTrigger implements Trigger {
+        @Override
+        public void fire(Connection conn, Object[] oldRow, Object[] newRow) throws SQLException {
+            newRow[1] = null;
+        }
+    }
+
+    /**
+     * Trigger that sets null value.
+     */
+    public static class NullTriggerAdapter extends TriggerAdapter {
+        @Override
+        public void fire(Connection conn, ResultSet oldRow, ResultSet newRow) throws SQLException {
+            newRow.updateNull(2);
+        }
+    }
+
+    private void testWrongDataType() throws Exception {
+        try (Connection conn = getConnection("trigger")) {
+            Statement stat = conn.createStatement();
+            stat.executeUpdate("CREATE TABLE TEST(A INTEGER, B INTEGER NOT NULL)");
+            PreparedStatement prep = conn.prepareStatement("INSERT INTO TEST VALUES (1, 2)");
+
+            stat.executeUpdate("CREATE TRIGGER TEST_TRIGGER BEFORE INSERT ON TEST FOR EACH ROW CALL '"
+                    + WrongTrigger.class.getName() + '\'');
+            assertThrows(ErrorCode.DATA_CONVERSION_ERROR_1, prep).executeUpdate();
+            stat.executeUpdate("DROP TRIGGER TEST_TRIGGER");
+
+            stat.executeUpdate("CREATE TRIGGER TEST_TRIGGER BEFORE INSERT ON TEST FOR EACH ROW CALL '"
+                    + WrongTriggerAdapter.class.getName() + '\'');
+            assertThrows(ErrorCode.DATA_CONVERSION_ERROR_1, prep).executeUpdate();
+            stat.executeUpdate("DROP TRIGGER TEST_TRIGGER");
+
+            stat.executeUpdate("CREATE TRIGGER TEST_TRIGGER BEFORE INSERT ON TEST FOR EACH ROW CALL '"
+                    + NullTrigger.class.getName() + '\'');
+            assertThrows(ErrorCode.NULL_NOT_ALLOWED, prep).executeUpdate();
+            stat.executeUpdate("DROP TRIGGER TEST_TRIGGER");
+
+            stat.executeUpdate("CREATE TRIGGER TEST_TRIGGER BEFORE INSERT ON TEST FOR EACH ROW CALL '"
+                    + NullTriggerAdapter.class.getName() + '\'');
+            assertThrows(ErrorCode.NULL_NOT_ALLOWED, prep).executeUpdate();
+            stat.executeUpdate("DROP TRIGGER TEST_TRIGGER");
+
+            stat.executeUpdate("DROP TABLE TEST");
         }
     }
 
@@ -118,23 +194,6 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
         }
     }
 
-    private void testDeleteInTrigger() throws SQLException {
-        if (config.mvStore) {
-            return;
-        }
-        Connection conn;
-        Statement stat;
-        conn = getConnection("trigger");
-        stat = conn.createStatement();
-        stat.execute("create table test(id int) as select 1");
-        stat.execute("create trigger test_u before update on test " +
-                "for each row call \"" + DeleteTrigger.class.getName() + "\"");
-        // this used to throw a NullPointerException before we fixed it
-        stat.execute("update test set id = 2");
-        stat.execute("drop table test");
-        conn.close();
-    }
-
     private void testTriggerAdapter() throws SQLException {
         Connection conn;
         Statement stat;
@@ -175,7 +234,7 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
         stat = conn.createStatement();
         stat.execute("drop table if exists test");
         stat.execute("create table test(id int)");
-        assertThrows(ErrorCode.TRIGGER_SELECT_AND_ROW_BASED_NOT_SUPPORTED, stat)
+        assertThrows(ErrorCode.INVALID_TRIGGER_FLAGS_1, stat)
                 .execute("create trigger test_insert before select on test " +
                     "for each row call \"" + TestTriggerAdapter.class.getName() + "\"");
         conn.close();
@@ -219,7 +278,7 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
         conn = getConnection("trigger");
         stat = conn.createStatement();
         stat.execute("drop table if exists test");
-        stat.execute("create table test(id int identity)");
+        stat.execute("create table test(id int generated by default as identity)");
         stat.execute("create view test_view as select * from test");
         stat.execute("create trigger test_view_insert " +
                 "instead of insert on test_view for each row call \"" +
@@ -232,12 +291,12 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
 
         PreparedStatement pstat;
         pstat = conn.prepareStatement(
-                "insert into test_view values()", Statement.RETURN_GENERATED_KEYS);
+                "insert into test_view values()", new int[] { 1 });
         int count = pstat.executeUpdate();
         assertEquals(1, count);
 
         ResultSet gkRs;
-        gkRs = stat.executeQuery("select scope_identity()");
+        gkRs = pstat.getGeneratedKeys();
 
         assertTrue(gkRs.next());
         assertEquals(1, gkRs.getInt(1));
@@ -348,9 +407,7 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
                 prepInsert.execute();
                 ResultSet rs = prepInsert.getGeneratedKeys();
                 if (rs.next()) {
-                    JdbcConnection jconn = (JdbcConnection) conn;
-                    Session session = (Session) jconn.getSession();
-                    session.setLastTriggerIdentity(ValueBigint.get(rs.getLong(1)));
+                    newRow[0] = ValueBigint.get(rs.getLong(1));
                 }
             }
         }
@@ -451,6 +508,10 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
     }
 
     private void testTriggerAsJavascript() throws SQLException {
+        ScriptEngineManager scriptEngineManager = new ScriptEngineManager();
+        if (scriptEngineManager.getEngineByName("javascript") == null) {
+            return;
+        }
         deleteDb("trigger");
         testTrigger("javascript");
     }
@@ -476,7 +537,7 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
             String triggerClassName = this.getClass().getName() + "."
                     + TestTriggerAlterTable.class.getSimpleName();
             final String body = "//javascript\n"
-                    + "new Packages." + triggerClassName + "();";
+                    + "new (Java.type(\"" + triggerClassName + "\"))();";
             stat.execute("create trigger test_upd before insert on test as $$"
                     + body + " $$");
         } else {
@@ -577,35 +638,35 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
         // [FOR EACH ROW] [QUEUE n] [NOWAIT] CALL triggeredClass
         stat.execute("CREATE TRIGGER IF NOT EXISTS INS_BEFORE " +
                 "BEFORE INSERT ON TEST " +
-                "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\"");
+                "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + '\'');
         stat.execute("CREATE TRIGGER IF NOT EXISTS INS_BEFORE " +
                 "BEFORE INSERT ON TEST " +
-                "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\"");
+                "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + '\'');
         stat.execute("CREATE TRIGGER INS_AFTER " + "" +
                 "AFTER INSERT ON TEST " +
-                "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\"");
+                "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + '\'');
         stat.execute("CREATE TRIGGER UPD_BEFORE " +
                 "BEFORE UPDATE ON TEST " +
-                "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\"");
+                "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + '\'');
         stat.execute("CREATE TRIGGER INS_AFTER_ROLLBACK " +
                 "AFTER INSERT, ROLLBACK ON TEST " +
-                "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\"");
+                "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + '\'');
         stat.execute("INSERT INTO TEST VALUES(1, 'Hello')");
         ResultSet rs;
         rs = stat.executeQuery("SCRIPT");
         checkRows(rs, new String[] {
                 "CREATE FORCE TRIGGER \"PUBLIC\".\"INS_BEFORE\" " +
                     "BEFORE INSERT ON \"PUBLIC\".\"TEST\" " +
-                    "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\";",
+                    "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + "';",
                 "CREATE FORCE TRIGGER \"PUBLIC\".\"INS_AFTER\" " +
                     "AFTER INSERT ON \"PUBLIC\".\"TEST\" " +
-                    "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\";",
+                    "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + "';",
                 "CREATE FORCE TRIGGER \"PUBLIC\".\"UPD_BEFORE\" " +
                     "BEFORE UPDATE ON \"PUBLIC\".\"TEST\" " +
-                    "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\";",
+                    "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + "';",
                 "CREATE FORCE TRIGGER \"PUBLIC\".\"INS_AFTER_ROLLBACK\" " +
                     "AFTER INSERT, ROLLBACK ON \"PUBLIC\".\"TEST\" " +
-                    "FOR EACH ROW NOWAIT CALL \"" + getClass().getName() + "\";",
+                    "FOR EACH ROW NOWAIT CALL '" + getClass().getName() + "';",
                         });
         while (rs.next()) {
             String sql = rs.getString(1);
@@ -650,6 +711,66 @@ public class TestTriggersConstraints extends TestDb implements Trigger {
         if (set.size() > 0) {
             fail("set should be empty: " + set);
         }
+    }
+
+    private void testConcurrent() throws Exception {
+        deleteDb("trigger");
+        Connection conn = getConnection("trigger");
+        Statement stat = conn.createStatement();
+        stat.execute("CREATE TABLE TEST(A INT)");
+        stat.execute("CREATE TRIGGER TEST_BEFORE BEFORE INSERT, UPDATE ON TEST FOR EACH ROW CALL " +
+                StringUtils.quoteStringSQL(ConcurrentTrigger.class.getName()));
+        Thread[] threads = new Thread[ConcurrentTrigger.N_T];
+        AtomicInteger a = new AtomicInteger();
+        for (int i = 0; i < ConcurrentTrigger.N_T; i++) {
+            Thread thread = new Thread() {
+                @Override
+                public void run() {
+                    try (Connection conn = getConnection("trigger")) {
+                        PreparedStatement prep = conn.prepareStatement("INSERT INTO TEST(A) VALUES ?");
+                        for (int j = 0; j < ConcurrentTrigger.N_R; j++) {
+                            prep.setInt(1, a.getAndIncrement());
+                            prep.executeUpdate();
+                        }
+                    } catch (SQLException e) {
+                        throw DbException.convert(e);
+                    }
+                }
+            };
+            threads[i] = thread;
+        }
+        synchronized (TestTriggersConstraints.class) {
+            AtomicIntegerArray array = ConcurrentTrigger.array;
+            int l = array.length();
+            for (int i = 0; i < l; i++) {
+                array.set(i, 0);
+            }
+            for (Thread thread : threads) {
+                thread.start();
+            }
+            for (Thread thread : threads) {
+                thread.join();
+            }
+            for (int i = 0; i < l; i++) {
+                assertEquals(1, array.get(i));
+            }
+        }
+        conn.close();
+    }
+
+    public static final class ConcurrentTrigger extends TriggerAdapter {
+
+        static final int N_T = 4;
+
+        static final int N_R = 250;
+
+        static final AtomicIntegerArray array = new AtomicIntegerArray(N_T * N_R);
+
+        @Override
+        public void fire(Connection conn, ResultSet oldRow, ResultSet newRow) throws SQLException {
+            array.set(newRow.getInt(1), 1);
+        }
+
     }
 
     @Override

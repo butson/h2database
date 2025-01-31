@@ -1,16 +1,20 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.command.query;
 
+import static org.h2.expression.Expression.WITHOUT_PARENTHESES;
+import static org.h2.util.HasSQL.DEFAULT_SQL_FLAGS;
+
 import java.util.ArrayList;
 import java.util.HashSet;
 
 import org.h2.api.ErrorCode;
+import org.h2.engine.Constants;
 import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionColumn;
 import org.h2.expression.ExpressionList;
@@ -25,7 +29,7 @@ import org.h2.table.ColumnResolver;
 import org.h2.table.Table;
 import org.h2.table.TableFilter;
 import org.h2.table.TableValueConstructorTable;
-import org.h2.util.HasSQL;
+import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 
 /**
@@ -38,9 +42,9 @@ public class TableValueConstructor extends Query {
     /**
      * The table.
      */
-    final TableValueConstructorTable table;
+    TableValueConstructorTable table;
 
-    private final TableValueColumnResolver columnResolver;
+    private TableValueColumnResolver columnResolver;
 
     private double cost;
 
@@ -49,23 +53,23 @@ public class TableValueConstructor extends Query {
      *
      * @param session
      *            the session
-     * @param columns
-     *            the columns
      * @param rows
      *            the rows
      */
-    public TableValueConstructor(Session session, Column[] columns, ArrayList<ArrayList<Expression>> rows) {
+    public TableValueConstructor(SessionLocal session, ArrayList<ArrayList<Expression>> rows) {
         super(session);
         this.rows = rows;
-        Database database = session.getDatabase();
-        int columnCount = columns.length;
-        ArrayList<Expression> expressions = new ArrayList<>(columnCount);
-        for (int i = 0; i < columnCount; i++) {
-            expressions.add(new ExpressionColumn(database, null, null, columns[i].getName(), false));
+        if ((visibleColumnCount = rows.get(0).size()) > Constants.MAX_COLUMNS) {
+            throw DbException.get(ErrorCode.TOO_MANY_COLUMNS_1, "" + Constants.MAX_COLUMNS);
         }
-        this.expressions = expressions;
-        table = new TableValueConstructorTable(session.getDatabase().getMainSchema(), session, columns, rows);
-        columnResolver = new TableValueColumnResolver();
+        for (ArrayList<Expression> row : rows) {
+            for (Expression column : row) {
+                if (!column.isConstant()) {
+                    return;
+                }
+            }
+        }
+        createTable();
     }
 
     /**
@@ -80,7 +84,7 @@ public class TableValueConstructor extends Query {
      * @param rows
      *            the rows with data
      */
-    public static void getVisibleResult(Session session, ResultTarget result, Column[] columns,
+    public static void getVisibleResult(SessionLocal session, ResultTarget result, Column[] columns,
             ArrayList<ArrayList<Expression>> rows) {
         int count = columns.length;
         for (ArrayList<Expression> row : rows) {
@@ -109,9 +113,7 @@ public class TableValueConstructor extends Query {
             if (i > 0) {
                 builder.append(", ");
             }
-            builder.append('(');
-            Expression.writeExpressions(builder, rows.get(i), sqlFlags);
-            builder.append(')');
+            Expression.writeExpressions(builder.append('('), rows.get(i), sqlFlags).append(')');
         }
     }
 
@@ -121,10 +123,10 @@ public class TableValueConstructor extends Query {
     }
 
     @Override
-    protected ResultInterface queryWithoutCache(int limit, ResultTarget target) {
+    protected ResultInterface queryWithoutCache(long limit, ResultTarget target) {
         OffsetFetch offsetFetch = getOffsetFetch(limit);
         long offset = offsetFetch.offset;
-        int fetch = offsetFetch.fetch;
+        long fetch = offsetFetch.fetch;
         boolean fetchPercent = offsetFetch.fetchPercent;
         int visibleColumnCount = this.visibleColumnCount, resultColumnCount = this.resultColumnCount;
         LocalResult result = new LocalResult(session, expressionArray, visibleColumnCount, resultColumnCount);
@@ -157,9 +159,8 @@ public class TableValueConstructor extends Query {
     @Override
     public void init() {
         if (checkInit) {
-            DbException.throwInternalError();
+            throw DbException.getInternalError();
         }
-        visibleColumnCount = expressions.size();
         checkInit = true;
         if (withTies && !hasOrder()) {
             throw DbException.get(ErrorCode.WITH_TIES_WITHOUT_ORDER_BY);
@@ -167,19 +168,14 @@ public class TableValueConstructor extends Query {
     }
 
     @Override
-    public void prepare() {
-        if (isPrepared) {
-            // sometimes a subquery is prepared twice (CREATE TABLE AS SELECT)
-            return;
+    public void prepareExpressions() {
+        if (columnResolver == null) {
+            createTable();
         }
-        if (!checkInit) {
-            DbException.throwInternalError("not initialized");
-        }
-        isPrepared = true;
         if (orderList != null) {
             ArrayList<String> expressionsSQL = new ArrayList<>();
             for (Expression e : expressions) {
-                expressionsSQL.add(e.getSQL(HasSQL.DEFAULT_SQL_FLAGS));
+                expressionsSQL.add(e.getSQL(DEFAULT_SQL_FLAGS, WITHOUT_PARENTHESES));
             }
             if (initOrder(expressionsSQL, false, null)) {
                 prepareOrder(orderList, expressions.size());
@@ -196,14 +192,56 @@ public class TableValueConstructor extends Query {
             cleanupOrder();
         }
         expressionArray = expressions.toArray(new Expression[0]);
+    }
+
+    @Override
+    public void preparePlan() {
         double cost = 0;
         int columnCount = visibleColumnCount;
-        for (ArrayList<Expression> row : rows) {
+        for (ArrayList<Expression> r : rows) {
             for (int i = 0; i < columnCount; i++) {
-                cost += row.get(i).getCost();
+                cost += r.get(i).getCost();
             }
         }
         this.cost = cost + rows.size();
+        isPrepared = true;
+    }
+
+    private void createTable() {
+        int rowCount = rows.size();
+        ArrayList<Expression> row = rows.get(0);
+        int columnCount = row.size();
+        TypeInfo[] types = new TypeInfo[columnCount];
+        for (int c = 0; c < columnCount; c++) {
+            Expression e = row.get(c).optimize(session);
+            row.set(c, e);
+            TypeInfo type = e.getType();
+            if (type.getValueType() == Value.UNKNOWN) {
+                type = TypeInfo.TYPE_VARCHAR;
+            }
+            types[c] = type;
+        }
+        for (int r = 1; r < rowCount; r++) {
+            row = rows.get(r);
+            for (int c = 0; c < columnCount; c++) {
+                Expression e = row.get(c).optimize(session);
+                row.set(c, e);
+                types[c] = TypeInfo.getHigherType(types[c], e.getType());
+            }
+        }
+        Column[] columns = new Column[columnCount];
+        for (int c = 0; c < columnCount;) {
+            TypeInfo type = types[c];
+            columns[c] = new Column("C" + ++c, type);
+        }
+        Database database = session.getDatabase();
+        ArrayList<Expression> expressions = new ArrayList<>(columnCount);
+        for (int i = 0; i < columnCount; i++) {
+            expressions.add(new ExpressionColumn(database, null, null, columns[i].getName()));
+        }
+        this.expressions = expressions;
+        table = new TableValueConstructorTable(database.getMainSchema(), session, columns, rows);
+        columnResolver = new TableValueColumnResolver();
     }
 
     @Override
@@ -219,13 +257,13 @@ public class TableValueConstructor extends Query {
     }
 
     @Override
-    public void setForUpdate(boolean forUpdate) {
+    public void setForUpdate(ForUpdate forUpdate) {
         throw DbException.get(ErrorCode.RESULT_SET_READONLY);
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        int columnCount = expressions.size();
+    public void mapColumns(ColumnResolver resolver, int level, boolean outer) {
+        int columnCount = visibleColumnCount;
         for (ArrayList<Expression> row : rows) {
             for (int i = 0; i < columnCount; i++) {
                 row.get(i).mapColumns(resolver, level, Expression.MAP_INITIAL);
@@ -235,7 +273,7 @@ public class TableValueConstructor extends Query {
 
     @Override
     public void setEvaluatable(TableFilter tableFilter, boolean b) {
-        int columnCount = expressionArray.length;
+        int columnCount = visibleColumnCount;
         for (ArrayList<Expression> row : rows) {
             for (int i = 0; i < columnCount; i++) {
                 row.get(i).setEvaluatable(tableFilter, b);
@@ -265,8 +303,8 @@ public class TableValueConstructor extends Query {
     }
 
     @Override
-    public void updateAggregate(Session s, int stage) {
-        int columnCount = expressionArray.length;
+    public void updateAggregate(SessionLocal s, int stage) {
+        int columnCount = visibleColumnCount;
         for (ArrayList<Expression> row : rows) {
             for (int i = 0; i < columnCount; i++) {
                 row.get(i).updateAggregate(s, stage);
@@ -280,17 +318,17 @@ public class TableValueConstructor extends Query {
     }
 
     @Override
-    public String getPlanSQL(int sqlFlags) {
-        StringBuilder builder = new StringBuilder();
+    public StringBuilder getPlanSQL(StringBuilder builder, int sqlFlags) {
+        writeWithList(builder, sqlFlags);
         getValuesSQL(builder, sqlFlags, rows);
-        appendEndOfQueryToSQL(builder, sqlFlags, expressions.toArray(new Expression[0]));
-        return builder.toString();
+        appendEndOfQueryToSQL(builder, sqlFlags, expressionArray);
+        return builder;
     }
 
     @Override
     public Table toTable(String alias, Column[] columnTemplates, ArrayList<Parameter> parameters,
             boolean forCreateView, Query topQuery) {
-        if (!hasOrder() && offsetExpr == null && limitExpr == null) {
+        if (!hasOrder() && offsetExpr == null && fetchExpr == null && table != null) {
             return table;
         }
         return super.toTable(alias, columnTemplates, parameters, forCreateView, topQuery);
@@ -313,7 +351,7 @@ public class TableValueConstructor extends Query {
 
     @Override
     public Expression getIfSingleRow() {
-        if (offsetExpr != null || limitExpr != null || rows.size() != 1) {
+        if (offsetExpr != null || fetchExpr != null || rows.size() != 1) {
             return null;
         }
         ArrayList<Expression> row = rows.get(0);

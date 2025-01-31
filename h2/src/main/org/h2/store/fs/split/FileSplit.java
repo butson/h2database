@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import org.h2.message.DbException;
+import org.h2.mvstore.DataUtils;
 import org.h2.store.fs.FileBaseDefault;
 import org.h2.store.fs.FilePath;
 
@@ -92,7 +93,7 @@ class FileSplit extends FileBaseDefault {
                 try {
                     filePath.getBase(i).delete();
                 } catch (DbException e) {
-                    throw DbException.convertToIOException(e);
+                    throw DataUtils.convertToIOException(e);
                 }
             }
             System.arraycopy(list, 0, newList, 0, newList.length);

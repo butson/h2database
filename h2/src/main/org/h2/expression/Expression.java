@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,22 +8,24 @@ package org.h2.expression;
 import java.util.List;
 
 import org.h2.api.ErrorCode;
-import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.Constants;
+import org.h2.engine.Mode;
+import org.h2.engine.SessionLocal;
+import org.h2.expression.function.NamedExpression;
 import org.h2.message.DbException;
-import org.h2.result.ResultInterface;
 import org.h2.table.Column;
 import org.h2.table.ColumnResolver;
 import org.h2.table.TableFilter;
 import org.h2.util.HasSQL;
+import org.h2.util.StringUtils;
 import org.h2.value.TypeInfo;
+import org.h2.value.Typed;
 import org.h2.value.Value;
-import org.h2.value.ValueCollectionBase;
 
 /**
  * An expression is a operation, a value, or a function in a query.
  */
-public abstract class Expression implements HasSQL {
+public abstract class Expression implements HasSQL, Typed {
 
     /**
      * Initial state for {@link #mapColumns(ColumnResolver, int, int)}.
@@ -42,6 +44,22 @@ public abstract class Expression implements HasSQL {
      */
     public static final int MAP_IN_AGGREGATE = 2;
 
+    /**
+     * Wrap expression in parentheses only if it can't be safely included into
+     * other expressions without them.
+     */
+    public static final int AUTO_PARENTHESES = 0;
+
+    /**
+     * Wrap expression in parentheses unconditionally.
+     */
+    public static final int WITH_PARENTHESES = 1;
+
+    /**
+     * Do not wrap expression in parentheses.
+     */
+    public static final int WITHOUT_PARENTHESES = 2;
+
     private boolean addedToFilter;
 
     /**
@@ -50,14 +68,17 @@ public abstract class Expression implements HasSQL {
      * @param builder the builder to append the SQL to
      * @param expressions the list of expressions
      * @param sqlFlags formatting flags
+     * @return the specified string builder
      */
-    public static void writeExpressions(StringBuilder builder, List<? extends Expression> expressions, int sqlFlags) {
+    public static StringBuilder writeExpressions(StringBuilder builder, List<? extends Expression> expressions,
+            int sqlFlags) {
         for (int i = 0, length = expressions.size(); i < length; i++) {
             if (i > 0) {
                 builder.append(", ");
             }
-            expressions.get(i).getSQL(builder, sqlFlags);
+            expressions.get(i).getUnenclosedSQL(builder, sqlFlags);
         }
+        return builder;
     }
 
     /**
@@ -66,8 +87,9 @@ public abstract class Expression implements HasSQL {
      * @param builder the builder to append the SQL to
      * @param expressions the list of expressions
      * @param sqlFlags formatting flags
+     * @return the specified string builder
      */
-    public static void writeExpressions(StringBuilder builder, Expression[] expressions, int sqlFlags) {
+    public static StringBuilder writeExpressions(StringBuilder builder, Expression[] expressions, int sqlFlags) {
         for (int i = 0, length = expressions.length; i < length; i++) {
             if (i > 0) {
                 builder.append(", ");
@@ -76,9 +98,10 @@ public abstract class Expression implements HasSQL {
             if (e == null) {
                 builder.append("DEFAULT");
             } else {
-                e.getSQL(builder, sqlFlags);
+                e.getUnenclosedSQL(builder, sqlFlags);
             }
         }
+        return builder;
     }
 
     /**
@@ -87,14 +110,15 @@ public abstract class Expression implements HasSQL {
      * @param session the session
      * @return the result
      */
-    public abstract Value getValue(Session session);
+    public abstract Value getValue(SessionLocal session);
 
     /**
-     * Returns the data type. The data type may not be known before the
+     * Returns the data type. The data type may be unknown before the
      * optimization phase.
      *
      * @return the data type
      */
+    @Override
     public abstract TypeInfo getType();
 
     /**
@@ -113,7 +137,7 @@ public abstract class Expression implements HasSQL {
      * @param session the session
      * @return the optimized expression
      */
-    public abstract Expression optimize(Session session);
+    public abstract Expression optimize(SessionLocal session);
 
     /**
      * Try to optimize or remove the condition.
@@ -121,7 +145,7 @@ public abstract class Expression implements HasSQL {
      * @param session the session
      * @return the optimized condition, or {@code null}
      */
-    public final Expression optimizeCondition(Session session) {
+    public final Expression optimizeCondition(SessionLocal session) {
         Expression e = optimize(session);
         if (e.isConstant()) {
             return e.getBooleanValue(session) ? null : ValueExpression.FALSE;
@@ -138,30 +162,62 @@ public abstract class Expression implements HasSQL {
      */
     public abstract void setEvaluatable(TableFilter tableFilter, boolean value);
 
-    /**
-     * Appends the SQL statement of this expression to the specified builder.
-     * This may not always be the original SQL statement, specially after
-     * optimization. Enclosing '(' and ')' are always appended.
-     *
-     * @param builder
-     *            string builder
-     * @param sqlFlags
-     *            formatting flags
-     * @return the specified string builder
-     */
-    public StringBuilder getEnclosedSQL(StringBuilder builder, int sqlFlags) {
-        int first = builder.length();
-        int last = getSQL(builder, sqlFlags).length() - 1;
-        if (last <= first || builder.charAt(first) != '(' || builder.charAt(last) != ')') {
-            builder.insert(first, '(').append(')');
-        }
-        return builder;
+    @Override
+    public final String getSQL(int sqlFlags) {
+        return getSQL(new StringBuilder(), sqlFlags, AUTO_PARENTHESES).toString();
+    }
+
+    @Override
+    public final StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+        return getSQL(builder, sqlFlags, AUTO_PARENTHESES);
     }
 
     /**
-     * Appends the SQL statement of this expression to the specified builder.
-     * This may not always be the original SQL statement, specially after
-     * optimization. Enclosing '(' and ')' are removed.
+     * Get the SQL statement of this expression. This may not always be the
+     * original SQL statement, especially after optimization.
+     *
+     * @param sqlFlags
+     *            formatting flags
+     * @param parentheses
+     *            parentheses mode
+     * @return the SQL statement
+     */
+    public final String getSQL(int sqlFlags, int parentheses) {
+        return getSQL(new StringBuilder(), sqlFlags, parentheses).toString();
+    }
+
+    /**
+     * Get the SQL statement of this expression. This may not always be the
+     * original SQL statement, especially after optimization.
+     *
+     * @param builder
+     *            string builder
+     * @param sqlFlags
+     *            formatting flags
+     * @param parentheses
+     *            parentheses mode
+     * @return the specified string builder
+     */
+    public final StringBuilder getSQL(StringBuilder builder, int sqlFlags, int parentheses) {
+        return parentheses == WITH_PARENTHESES || parentheses != WITHOUT_PARENTHESES && needParentheses()
+                ? getUnenclosedSQL(builder.append('('), sqlFlags).append(')')
+                : getUnenclosedSQL(builder, sqlFlags);
+    }
+
+    /**
+     * Returns whether this expressions needs to be wrapped in parentheses when
+     * it is used as an argument of other expressions.
+     *
+     * @return {@code true} if it is
+     */
+    public boolean needParentheses() {
+        return false;
+    }
+
+    /**
+     * Get the SQL statement of this expression. This may not always be the
+     * original SQL statement, especially after optimization. Enclosing '(' and
+     * ')' are always appended.
      *
      * @param builder
      *            string builder
@@ -169,15 +225,22 @@ public abstract class Expression implements HasSQL {
      *            formatting flags
      * @return the specified string builder
      */
-    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
-        int first = builder.length();
-        int last = getSQL(builder, sqlFlags).length() - 1;
-        if (last > first && builder.charAt(first) == '(' && builder.charAt(last) == ')') {
-            builder.setLength(last);
-            builder.deleteCharAt(first);
-        }
-        return builder;
+    public final StringBuilder getEnclosedSQL(StringBuilder builder, int sqlFlags) {
+        return getUnenclosedSQL(builder.append('('), sqlFlags).append(')');
     }
+
+    /**
+     * Get the SQL statement of this expression. This may not always be the
+     * original SQL statement, especially after optimization. Enclosing '(' and
+     * ')' are never appended.
+     *
+     * @param builder
+     *            string builder
+     * @param sqlFlags
+     *            formatting flags
+     * @return the specified string builder
+     */
+    public abstract StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags);
 
     /**
      * Update an aggregate value. This method is called at statement execution
@@ -189,7 +252,7 @@ public abstract class Expression implements HasSQL {
      * @param session the session
      * @param stage select stage
      */
-    public abstract void updateAggregate(Session session, int stage);
+    public abstract void updateAggregate(SessionLocal session, int stage);
 
     /**
      * Check if this expression and all sub-expressions can fulfill a criteria.
@@ -211,14 +274,25 @@ public abstract class Expression implements HasSQL {
 
     /**
      * If it is possible, return the negated expression. This is used
-     * to optimize NOT expressions: NOT ID>10 can be converted to
+     * to optimize NOT expressions: NOT ID&gt;10 can be converted to
      * ID&lt;=10. Returns null if negating is not possible.
      *
      * @param session the session
      * @return the negated expression, or null
      */
-    public Expression getNotIfPossible(@SuppressWarnings("unused") Session session) {
+    public Expression getNotIfPossible(@SuppressWarnings("unused") SessionLocal session) {
         // by default it is not possible
+        return null;
+    }
+
+    /**
+     * Returns data type of this expression if it is statically known.
+     *
+     * @param session
+     *            the session
+     * @return data type or {@code null}
+     */
+    public TypeInfo getTypeIfStaticallyKnown(SessionLocal session) {
         return null;
     }
 
@@ -250,11 +324,11 @@ public abstract class Expression implements HasSQL {
     }
 
     /**
-     * Check if this is an auto-increment column.
+     * Check if this is an identity column.
      *
-     * @return true if it is an auto-increment column
+     * @return true if it is an identity column
      */
-    public boolean isAutoIncrement() {
+    public boolean isIdentity() {
         return false;
     }
 
@@ -266,8 +340,8 @@ public abstract class Expression implements HasSQL {
      * @param session the session
      * @return the result
      */
-    public boolean getBooleanValue(Session session) {
-        return getValue(session).getBoolean();
+    public boolean getBooleanValue(SessionLocal session) {
+        return getValue(session).isTrue();
     }
 
     /**
@@ -277,7 +351,7 @@ public abstract class Expression implements HasSQL {
      * @param filter the table filter
      */
     @SuppressWarnings("unused")
-    public void createIndexConditions(Session session, TableFilter filter) {
+    public void createIndexConditions(SessionLocal session, TableFilter filter) {
         // default is do nothing
     }
 
@@ -288,7 +362,7 @@ public abstract class Expression implements HasSQL {
      * @param columnIndex 0-based column index
      * @return the column name
      */
-    public String getColumnName(Session session, int columnIndex) {
+    public String getColumnName(SessionLocal session, int columnIndex) {
         return getAlias(session, columnIndex);
     }
 
@@ -337,17 +411,25 @@ public abstract class Expression implements HasSQL {
      * @param columnIndex 0-based column index
      * @return the alias name
      */
-    public String getAlias(Session session, int columnIndex) {
+    public String getAlias(SessionLocal session, int columnIndex) {
         switch (session.getMode().expressionNames) {
-        default:
-            return getUnenclosedSQL(new StringBuilder(), QUOTE_ONLY_WHEN_REQUIRED | NO_CASTS).toString();
+        default: {
+            String sql = getSQL(QUOTE_ONLY_WHEN_REQUIRED | NO_CASTS, WITHOUT_PARENTHESES);
+            if (sql.length() <= Constants.MAX_IDENTIFIER_LENGTH) {
+                return sql;
+            }
+        }
+        //$FALL-THROUGH$
+        case C_NUMBER:
+            return "C" + (columnIndex + 1);
         case EMPTY:
             return "";
         case NUMBER:
             return Integer.toString(columnIndex + 1);
-        case C_NUMBER:
-            return "C" + (columnIndex + 1);
         case POSTGRESQL_STYLE:
+            if (this instanceof NamedExpression) {
+                return StringUtils.toLowerEnglish(((NamedExpression) this).getName());
+            }
             return "?column?";
         }
     }
@@ -357,17 +439,19 @@ public abstract class Expression implements HasSQL {
      *
      * @param session the session
      * @param columnIndex 0-based column index
+     * @param cte {@code true} for CTE, {@code false} for tables and views
      * @return the column name for a view
      */
-    public String getColumnNameForView(Session session, int columnIndex) {
-        switch (session.getMode().viewExpressionNames) {
+    public String getColumnNameForView(SessionLocal session, int columnIndex, boolean cte) {
+        Mode mode = session.getMode();
+        switch (cte ? mode.cteExpressionNames : mode.viewExpressionNames) {
         case AS_IS:
         default:
             return getAlias(session, columnIndex);
         case EXCEPTION:
             throw DbException.get(ErrorCode.COLUMN_ALIAS_IS_NOT_SPECIFIED_1, getTraceSQL());
         case MYSQL_STYLE: {
-            String name = getUnenclosedSQL(new StringBuilder(), QUOTE_ONLY_WHEN_REQUIRED | NO_CASTS).toString();
+            String name = getSQL(QUOTE_ONLY_WHEN_REQUIRED | NO_CASTS, WITHOUT_PARENTHESES);
             if (name.length() > 64) {
                 name = "Name_exp_" + (columnIndex + 1);
             }
@@ -408,56 +492,6 @@ public abstract class Expression implements HasSQL {
     }
 
     /**
-     * If this expression consists of column expressions it should return them.
-     *
-     * @param session the session
-     * @return array of expression columns if applicable, null otherwise
-     */
-    @SuppressWarnings("unused")
-    public Expression[] getExpressionColumns(Session session) {
-        return null;
-    }
-
-    /**
-     * Extracts expression columns from ValueArray
-     *
-     * @param session the current session
-     * @param value the value to extract columns from
-     * @return array of expression columns
-     */
-    protected static Expression[] getExpressionColumns(Session session, ValueCollectionBase value) {
-        Value[] list = value.getList();
-        ExpressionColumn[] expr = new ExpressionColumn[list.length];
-        for (int i = 0, len = list.length; i < len; i++) {
-            Value v = list[i];
-            Column col = new Column("C" + (i + 1), v.getType());
-            expr[i] = new ExpressionColumn(session.getDatabase(), col);
-        }
-        return expr;
-    }
-
-    /**
-     * Extracts expression columns from the given result set.
-     *
-     * @param session the session
-     * @param result the result
-     * @return an array of expression columns
-     */
-    public static Expression[] getExpressionColumns(Session session, ResultInterface result) {
-        int columnCount = result.getVisibleColumnCount();
-        Expression[] expressions = new Expression[columnCount];
-        Database db = session == null ? null : session.getDatabase();
-        for (int i = 0; i < columnCount; i++) {
-            String name = result.getColumnName(i);
-            TypeInfo type = result.getColumnType(i);
-            Column col = new Column(name, type);
-            Expression expr = new ExpressionColumn(db, col);
-            expressions[i] = expr;
-        }
-        return expressions;
-    }
-
-    /**
      * Returns count of subexpressions.
      *
      * @return count of subexpressions
@@ -475,6 +509,42 @@ public abstract class Expression implements HasSQL {
      */
     public Expression getSubexpression(int index) {
         throw new IndexOutOfBoundsException();
+    }
+
+    /**
+     * Return the resulting value of when operand for the current row.
+     *
+     * @param session
+     *            the session
+     * @param left
+     *            value on the left side
+     * @return the result
+     */
+    public boolean getWhenValue(SessionLocal session, Value left) {
+        return session.compareWithNull(left, getValue(session), true) == 0;
+    }
+
+    /**
+     * Appends the SQL statement of this when operand to the specified builder.
+     *
+     * @param builder
+     *            string builder
+     * @param sqlFlags
+     *            formatting flags
+     * @return the specified string builder
+     */
+    public StringBuilder getWhenSQL(StringBuilder builder, int sqlFlags) {
+        return getUnenclosedSQL(builder.append(' '), sqlFlags);
+    }
+
+    /**
+     * Returns whether this expression is a right side of condition in a when
+     * operand.
+     *
+     * @return {@code true} if it is, {@code false} otherwise
+     */
+    public boolean isWhenConditionOperand() {
+        return false;
     }
 
 }

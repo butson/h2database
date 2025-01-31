@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression.function;
 
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.ExpressionVisitor;
 import org.h2.expression.Operation0;
 import org.h2.value.TypeInfo;
@@ -16,7 +16,7 @@ import org.h2.value.ValueTimestamp;
 /**
  * Current datetime value function.
  */
-public final class CurrentDateTimeValueFunction extends Operation0 {
+public final class CurrentDateTimeValueFunction extends Operation0 implements NamedExpression {
 
     /**
      * The function "CURRENT_DATE"
@@ -51,8 +51,8 @@ public final class CurrentDateTimeValueFunction extends Operation0 {
     /**
      * Get the name for this function id.
      *
-     * @param function the name
-     * @return the id
+     * @param function the function id
+     * @return the name
      */
     public static String getName(int function) {
         return NAMES[function];
@@ -72,13 +72,13 @@ public final class CurrentDateTimeValueFunction extends Operation0 {
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         return session.currentTimestamp().castTo(type, session);
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        builder.append(NAMES[function]);
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
+        builder.append(getName());
         if (scale >= 0) {
             builder.append('(').append(scale).append(')');
         }
@@ -89,7 +89,6 @@ public final class CurrentDateTimeValueFunction extends Operation0 {
     public boolean isEverything(ExpressionVisitor visitor) {
         switch (visitor.getType()) {
         case ExpressionVisitor.DETERMINISTIC:
-        case ExpressionVisitor.READONLY:
             return false;
         }
         return true;
@@ -103,6 +102,11 @@ public final class CurrentDateTimeValueFunction extends Operation0 {
     @Override
     public int getCost() {
         return 1;
+    }
+
+    @Override
+    public String getName() {
+        return NAMES[function];
     }
 
 }

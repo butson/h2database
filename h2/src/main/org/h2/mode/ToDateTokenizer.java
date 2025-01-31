@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: Daniel Gredler
  */
@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.h2.api.ErrorCode;
-import org.h2.expression.function.ToChar;
+import org.h2.expression.function.ToCharFunction;
 import org.h2.message.DbException;
 import org.h2.util.TimeZoneProvider;
 
@@ -21,7 +21,7 @@ import org.h2.util.TimeZoneProvider;
  * Emulates Oracle's TO_DATE function. This class knows all about the
  * TO_DATE-format conventions and how to parse the corresponding data.
  */
-class ToDateTokenizer {
+final class ToDateTokenizer {
 
     /**
      * The pattern for a number.
@@ -254,14 +254,14 @@ class ToDateTokenizer {
             int dateNr = 0;
             switch (formatTokenEnum) {
             case MONTH:
-                inputFragmentStr = setByName(params, ToChar.MONTHS);
+                inputFragmentStr = setByName(params, ToCharFunction.MONTHS);
                 break;
             case Q /* NOT supported yet */:
                 throwException(params, format("token '%s' not supported yet.",
                         formatTokenEnum.name()));
                 break;
             case MON:
-                inputFragmentStr = setByName(params, ToChar.SHORT_MONTHS);
+                inputFragmentStr = setByName(params, ToCharFunction.SHORT_MONTHS);
                 break;
             case MM:
                 // Note: In Calendar Month go from 0 - 11
@@ -328,16 +328,16 @@ class ToDateTokenizer {
                 params.setDay(dateNr);
                 break;
             case DAY:
-                inputFragmentStr = setByName(params, ToChar.WEEKDAYS);
+                inputFragmentStr = setByName(params, ToCharFunction.WEEKDAYS);
                 break;
             case DY:
-                inputFragmentStr = setByName(params, ToChar.SHORT_WEEKDAYS);
+                inputFragmentStr = setByName(params, ToCharFunction.SHORT_WEEKDAYS);
                 break;
             case J:
                 inputFragmentStr = matchStringOrThrow(PATTERN_NUMBER, params,
                         formatTokenEnum);
                 dateNr = Integer.parseInt(inputFragmentStr);
-                params.setAbsoluteDay(dateNr + ToChar.JULIAN_EPOCH);
+                params.setAbsoluteDay(dateNr + ToCharFunction.JULIAN_EPOCH);
                 break;
             default:
                 throw new IllegalArgumentException(format(
@@ -494,7 +494,7 @@ class ToDateTokenizer {
     static String setByName(ToDateParser params, int field) {
         String inputFragmentStr = null;
         String s = params.getInputStr();
-        String[] values = ToChar.getDateNames(field);
+        String[] values = ToCharFunction.getDateNames(field);
         for (int i = 0; i < values.length; i++) {
             String dayName = values[i];
             if (dayName == null) {
@@ -503,12 +503,12 @@ class ToDateTokenizer {
             int len = dayName.length();
             if (dayName.equalsIgnoreCase(s.substring(0, len))) {
                 switch (field) {
-                case ToChar.MONTHS:
-                case ToChar.SHORT_MONTHS:
+                case ToCharFunction.MONTHS:
+                case ToCharFunction.SHORT_MONTHS:
                     params.setMonth(i + 1);
                     break;
-                case ToChar.WEEKDAYS:
-                case ToChar.SHORT_WEEKDAYS:
+                case ToCharFunction.WEEKDAYS:
+                case ToCharFunction.SHORT_WEEKDAYS:
                     // TODO
                     break;
                 default:
@@ -617,7 +617,24 @@ class ToDateTokenizer {
 
         private static final List<FormatTokenEnum> INLINE_LIST = Collections.singletonList(INLINE);
 
-        private static List<FormatTokenEnum>[] TOKENS;
+        private static final List<FormatTokenEnum>[] TOKENS;
+
+        static {
+            @SuppressWarnings("unchecked")
+            List<FormatTokenEnum>[] tokens = new List[25];
+            for (FormatTokenEnum token : FormatTokenEnum.values()) {
+                String name = token.name();
+                if (name.indexOf('_') >= 0) {
+                    for (String tokenLets : name.split("_")) {
+                        putToCache(tokens, token, tokenLets);
+                    }
+                } else {
+                    putToCache(tokens, token, name);
+                }
+            }
+            TOKENS = tokens;
+        }
+
         private final ToDateParslet toDateParslet;
         private final Pattern patternToUse;
 
@@ -655,32 +672,12 @@ class ToDateTokenizer {
             if (formatStr != null && !formatStr.isEmpty()) {
                 char key = Character.toUpperCase(formatStr.charAt(0));
                 if (key >= 'A' && key <= 'Y') {
-                    List<FormatTokenEnum>[] tokens = TOKENS;
-                    if (tokens == null) {
-                        tokens = initTokens();
-                    }
-                    return tokens[key - 'A'];
+                    return TOKENS[key - 'A'];
                 } else if (key == '"') {
                     return INLINE_LIST;
                 }
             }
             return null;
-        }
-
-        @SuppressWarnings("unchecked")
-        private static List<FormatTokenEnum>[] initTokens() {
-            List<FormatTokenEnum>[] tokens = new List[25];
-            for (FormatTokenEnum token : FormatTokenEnum.values()) {
-                String name = token.name();
-                if (name.indexOf('_') >= 0) {
-                    for (String tokenLets : name.split("_")) {
-                        putToCache(tokens, token, tokenLets);
-                    }
-                } else {
-                    putToCache(tokens, token, name);
-                }
-            }
-            return TOKENS = tokens;
         }
 
         private static void putToCache(List<FormatTokenEnum>[] cache, FormatTokenEnum token, String name) {
@@ -709,6 +706,9 @@ class ToDateTokenizer {
             }
             return foundToken;
         }
+    }
+
+    private ToDateTokenizer() {
     }
 
 }

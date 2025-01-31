@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -212,6 +212,29 @@ public class ErrorCode {
      */
     public static final int ENUM_DUPLICATE = 22033;
 
+    /**
+     * The error with code <code>22034</code> is thrown when an
+     * attempt is made to read non-existing element of an array.
+     *
+     * Example:
+     * <pre>
+     * VALUES ARRAY[1, 2][3]
+     * </pre>
+     */
+    public static final int ARRAY_ELEMENT_ERROR_2 = 22034;
+
+    /**
+     * The error with code <code>22035</code> is thrown when an
+     * attempt is made to update an element in NULL array.
+     *
+     * Example:
+     * <pre>
+     * CREATE TABLE TEST(A INTEGER ARRAY) AS VALUES NULL;
+     * UPDATE TEST SET A[1] = 2;
+     * </pre>
+     */
+    public static final int NULL_VALUE_IN_ARRAY_TARGET = 22035;
+
     // 23: constraint violation
 
     /**
@@ -368,6 +391,30 @@ public class ErrorCode {
     public static final int TABLE_OR_VIEW_NOT_FOUND_1 = 42102;
 
     /**
+     * The error with code <code>42103</code> is thrown when
+     * trying to query, modify or drop a table or view that does not exists
+     * in this schema and database but similar names were found. A common cause
+     * is that the names are written in different case.
+     * Example:
+     * <pre>
+     * SELECT * FROM ABC;
+     * </pre>
+     */
+    public static final int TABLE_OR_VIEW_NOT_FOUND_WITH_CANDIDATES_2 = 42103;
+
+    /**
+     * The error with code <code>42104</code> is thrown when
+     * trying to query, modify or drop a table or view that does not exists
+     * in this schema and database but it is empty anyway. A common cause is
+     * that the wrong database was opened.
+     * Example:
+     * <pre>
+     * SELECT * FROM ABC;
+     * </pre>
+     */
+    public static final int TABLE_OR_VIEW_NOT_FOUND_DATABASE_EMPTY_1 = 42104;
+
+    /**
      * The error with code <code>42111</code> is thrown when
      * trying to create an index if an index with the same name already exists.
      * Example:
@@ -431,6 +478,41 @@ public class ErrorCode {
      * </pre>
      */
     public static final int INVALID_NAME_1 = 42602;
+
+    /**
+     * The error with code <code>42622</code> is thrown when
+     * name of identifier is too long.
+     * Example:
+     * <pre>
+     * char[] c = new char[1000];
+     * Arrays.fill(c, 'A');
+     * statement.executeQuery("SELECT 1 " + new String(c));
+     * </pre>
+     */
+    public static final int NAME_TOO_LONG_2 = 42622;
+    /**
+     * The error with code <code>42809</code> is thrown on attempt
+     * to add value to any type other than enum
+     * Example:
+     * <pre>
+     * statement.executeQuery("CREATE TYPE my_number AS NUMBER");
+     * statement.executeQuery("ALTER TYPE my_number ADD VALUE 'value'");
+     * </pre>
+     */
+    public static final int WRONG_OBJECT_TYPE = 42809;
+
+    // 54: program limit exceeded
+
+    /**
+     * The error with code <code>54011</code> is thrown when
+     * too many columns were specified in a table, select statement,
+     * or row value.
+     * Example:
+     * <pre>
+     * CREATE TABLE TEST(C1 INTEGER, C2 INTEGER, ..., C20000 INTEGER);
+     * </pre>
+     */
+    public static final int TOO_MANY_COLUMNS_1 = 54011;
 
     // 0A: feature not supported
 
@@ -549,10 +631,9 @@ public class ErrorCode {
 
     /**
      * The error with code <code>90005</code> is thrown when
-     * trying to create a trigger and using the combination of SELECT
-     * and FOR EACH ROW, which we do not support.
+     * trying to create a trigger with invalid combination of flags.
      */
-    public static final int TRIGGER_SELECT_AND_ROW_BASED_NOT_SUPPORTED = 90005;
+    public static final int INVALID_TRIGGER_FLAGS_1 = 90005;
 
     /**
      * The error with code <code>90006</code> is thrown when
@@ -582,7 +663,7 @@ public class ErrorCode {
      * trying to create a sequence with an invalid combination
      * of attributes (min value, max value, start value, etc).
      */
-    public static final int SEQUENCE_ATTRIBUTES_INVALID_6 = 90009;
+    public static final int SEQUENCE_ATTRIBUTES_INVALID_7 = 90009;
 
     /**
      * The error with code <code>90010</code> is thrown when
@@ -745,12 +826,21 @@ public class ErrorCode {
     public static final int FUNCTION_NOT_FOUND_1 = 90022;
 
     /**
-     * The error with code <code>90023</code> is thrown when
-     * trying to set a primary key on a nullable column.
-     * Example:
+     * The error with code <code>90023</code> is thrown when trying to set a
+     * primary key on a nullable column or when trying to drop NOT NULL
+     * constraint on primary key or identity column.
+     * Examples:
      * <pre>
      * CREATE TABLE TEST(ID INT, NAME VARCHAR);
      * ALTER TABLE TEST ADD CONSTRAINT PK PRIMARY KEY(ID);
+     * </pre>
+     * <pre>
+     * CREATE TABLE TEST(ID INT PRIMARY KEY, NAME VARCHAR);
+     * ALTER TABLE TEST ALTER COLUMN ID DROP NOT NULL;
+     * </pre>
+     * <pre>
+     * CREATE TABLE TEST(ID INT GENERATED ALWAYS AS IDENTITY, NAME VARCHAR);
+     * ALTER TABLE TEST ALTER COLUMN ID DROP NOT NULL;
      * </pre>
      */
     public static final int COLUMN_MUST_NOT_BE_NULLABLE_1 = 90023;
@@ -1013,19 +1103,12 @@ public class ErrorCode {
     // 90051 was removed
 
     /**
-     * The error with code <code>90052</code> is thrown when
-     * a subquery that is used as a value contains more than one column.
-     * Example of wrong usage:
+     * The error with code <code>90052</code> is thrown when a single-column
+     * subquery is expected but a subquery with other number of columns was
+     * specified.
+     * Example:
      * <pre>
-     * CREATE TABLE TEST(ID INT);
-     * INSERT INTO TEST VALUES(1), (2);
-     * SELECT * FROM TEST WHERE ID IN (SELECT 1, 2 FROM DUAL);
-     * </pre>
-     * Correct:
-     * <pre>
-     * CREATE TABLE TEST(ID INT);
-     * INSERT INTO TEST VALUES(1), (2);
-     * SELECT * FROM TEST WHERE ID IN (1, 2);
+     * VALUES ARRAY(SELECT A, B FROM TEST)
      * </pre>
      */
     public static final int SUBQUERY_IS_NOT_SINGLE_COLUMN = 90052;
@@ -1067,7 +1150,7 @@ public class ErrorCode {
 
     /**
     * The error with code <code>90056</code> is thrown when trying to format a
-    * timestamp using TO_DATE and TO_TIMESTAMP  with an invalid format.
+    * timestamp using TO_DATE and TO_TIMESTAMP with an invalid format.
     */
     public static final int INVALID_TO_DATE_FORMAT = 90056;
 
@@ -1653,14 +1736,14 @@ public class ErrorCode {
 
     /**
      * The error with code <code>90110</code> is thrown when
-     * trying to compare an array value against a non-array value.
+     * trying to compare or combine values of incomparable data types.
      * Example:
      * <pre>
      * CREATE TABLE test (id INT NOT NULL, name VARCHAR);
      * select * from test where id = (1, 2);
      * </pre>
      */
-    public static final int COMPARING_ARRAY_TO_SCALAR = 90110;
+    public static final int TYPES_ARE_NOT_COMPARABLE_2 = 90110;
 
     /**
      * The error with code <code>90111</code> is thrown when
@@ -1756,8 +1839,8 @@ public class ErrorCode {
      * Example:
      * <pre>
      * CREATE DOMAIN INTEGER AS VARCHAR;
-     * CREATE DOMAIN EMAIL AS VARCHAR CHECK LOCATE('@', VALUE) > 0;
-     * CREATE DOMAIN EMAIL AS VARCHAR CHECK LOCATE('@', VALUE) > 0;
+     * CREATE DOMAIN EMAIL AS VARCHAR CHECK LOCATE('@', VALUE) &gt; 0;
+     * CREATE DOMAIN EMAIL AS VARCHAR CHECK LOCATE('@', VALUE) &gt; 0;
      * </pre>
      */
     public static final int DOMAIN_ALREADY_EXISTS_1 = 90119;
@@ -1817,9 +1900,8 @@ public class ErrorCode {
     /**
      * The error with code <code>90125</code> is thrown when
      * PreparedStatement.setBigDecimal is called with object that extends the
-     * class BigDecimal, and the system property h2.allowBigDecimalExtensions is
-     * not set. Using extensions of BigDecimal is dangerous because the database
-     * relies on the behavior of BigDecimal. Example of wrong usage:
+     * class BigDecimal. Using extensions of BigDecimal is dangerous because the
+     * database relies on the behavior of BigDecimal. Example of wrong usage:
      * <pre>
      * BigDecimal bd = new MyDecimal("$10.3");
      * prep.setBigDecimal(1, bd);
@@ -2173,7 +2255,13 @@ public class ErrorCode {
      */
     public static final int COLUMN_ALIAS_IS_NOT_SPECIFIED_1 = 90156;
 
-    // next is 90157
+    /**
+     * The error with code <code>90157</code> is thrown when the integer
+     * index that is used in the GROUP BY is not in the SELECT list
+     */
+    public static final int GROUP_BY_NOT_IN_THE_RESULT = 90157;
+
+    // next is 90158
 
     private ErrorCode() {
         // utility class
@@ -2181,6 +2269,8 @@ public class ErrorCode {
 
     /**
      * INTERNAL
+     * @param errorCode to check
+     * @return true if provided code is common, false otherwise
      */
     public static boolean isCommon(int errorCode) {
         // this list is sorted alphabetically
@@ -2199,6 +2289,8 @@ public class ErrorCode {
         case SYNTAX_ERROR_2:
         case TABLE_OR_VIEW_ALREADY_EXISTS_1:
         case TABLE_OR_VIEW_NOT_FOUND_1:
+        case TABLE_OR_VIEW_NOT_FOUND_WITH_CANDIDATES_2:
+        case TABLE_OR_VIEW_NOT_FOUND_DATABASE_EMPTY_1:
         case VALUE_TOO_LONG_2:
             return true;
         }
@@ -2207,6 +2299,8 @@ public class ErrorCode {
 
     /**
      * INTERNAL
+     * @param errorCode to get state for
+     * @return error state
      */
     public static String getState(int errorCode) {
         // To convert SQLState to error code, replace
@@ -2226,9 +2320,15 @@ public class ErrorCode {
         // 21: cardinality violation
         case COLUMN_COUNT_DOES_NOT_MATCH: return "21S02";
 
+        // 22: data exception
+        case NULL_VALUE_IN_ARRAY_TARGET: return "2200E";
+        case ARRAY_ELEMENT_ERROR_2: return "2202E";
+
         // 42: syntax error or access rule violation
         case TABLE_OR_VIEW_ALREADY_EXISTS_1: return "42S01";
         case TABLE_OR_VIEW_NOT_FOUND_1: return "42S02";
+        case TABLE_OR_VIEW_NOT_FOUND_WITH_CANDIDATES_2: return "42S03";
+        case TABLE_OR_VIEW_NOT_FOUND_DATABASE_EMPTY_1: return "42S04";
         case INDEX_ALREADY_EXISTS_1: return "42S11";
         case INDEX_NOT_FOUND_1: return "42S12";
         case DUPLICATE_COLUMN_NAME_1: return "42S21";

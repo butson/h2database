@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -15,40 +15,21 @@ SELECT T1, T2, T1 = T2 FROM TEST;
 > 2010-01-01 10:00:00 2010-01-01 10:00:00 TRUE
 > rows: 1
 
-ALTER TABLE TEST ADD (T3 TIMESTAMP(0), T4 TIMESTAMP(9) WITHOUT TIME ZONE,
-    DT1 DATETIME, DT2 DATETIME(0), DT3 DATETIME(9),
-    DT2_1 DATETIME2, DT2_2 DATETIME2(0), DT2_3 DATETIME2(7),
-    SDT1 SMALLDATETIME);
+ALTER TABLE TEST ADD (T3 TIMESTAMP(0), T4 TIMESTAMP(9) WITHOUT TIME ZONE);
 > ok
 
-SELECT COLUMN_NAME, DATA_TYPE, TYPE_NAME, COLUMN_TYPE, NUMERIC_SCALE, DATETIME_PRECISION FROM INFORMATION_SCHEMA.COLUMNS
+SELECT COLUMN_NAME, DATA_TYPE, DATETIME_PRECISION FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_NAME = 'TEST' ORDER BY ORDINAL_POSITION;
-> COLUMN_NAME DATA_TYPE TYPE_NAME COLUMN_TYPE                    NUMERIC_SCALE DATETIME_PRECISION
-> ----------- --------- --------- ------------------------------ ------------- ------------------
-> T1          93        TIMESTAMP TIMESTAMP                      6             6
-> T2          93        TIMESTAMP TIMESTAMP WITHOUT TIME ZONE    6             6
-> T3          93        TIMESTAMP TIMESTAMP(0)                   0             0
-> T4          93        TIMESTAMP TIMESTAMP(9) WITHOUT TIME ZONE 9             9
-> DT1         93        TIMESTAMP DATETIME                       6             6
-> DT2         93        TIMESTAMP DATETIME(0)                    0             0
-> DT3         93        TIMESTAMP DATETIME(9)                    9             9
-> DT2_1       93        TIMESTAMP DATETIME2                      6             6
-> DT2_2       93        TIMESTAMP DATETIME2(0)                   0             0
-> DT2_3       93        TIMESTAMP DATETIME2(7)                   7             7
-> SDT1        93        TIMESTAMP SMALLDATETIME                  0             0
-> rows (ordered): 11
+> COLUMN_NAME DATA_TYPE DATETIME_PRECISION
+> ----------- --------- ------------------
+> T1          TIMESTAMP 6
+> T2          TIMESTAMP 6
+> T3          TIMESTAMP 0
+> T4          TIMESTAMP 9
+> rows (ordered): 4
 
 ALTER TABLE TEST ADD T5 TIMESTAMP(10);
 > exception INVALID_VALUE_SCALE
-
-ALTER TABLE TEST ADD DT4 DATETIME(10);
-> exception INVALID_VALUE_SCALE
-
-ALTER TABLE TEST ADD DT2_4 DATETIME2(10);
-> exception INVALID_VALUE_SCALE
-
-ALTER TABLE TEST ADD STD2 SMALLDATETIME(1);
-> exception SYNTAX_ERROR_1
 
 DROP TABLE TEST;
 > ok

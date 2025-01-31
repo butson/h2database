@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,11 +8,10 @@ package org.h2.value;
 import java.nio.charset.StandardCharsets;
 
 import org.h2.engine.SysProperties;
-import org.h2.util.MathUtils;
 import org.h2.util.Utils;
 
 /**
- * Implementation of the VARBINARY data type.
+ * Implementation of the BINARY VARYING data type.
  */
 public final class ValueVarbinary extends ValueBytesBase {
 
@@ -26,7 +25,7 @@ public final class ValueVarbinary extends ValueBytesBase {
      */
     private TypeInfo type;
 
-    protected ValueVarbinary(byte[] value) {
+    private ValueVarbinary(byte[] value) {
         super(value);
     }
 
@@ -68,7 +67,7 @@ public final class ValueVarbinary extends ValueBytesBase {
         TypeInfo type = this.type;
         if (type == null) {
             long precision = value.length;
-            this.type = type = new TypeInfo(VARBINARY, precision, 0, MathUtils.convertLongToInt(precision * 2), null);
+            this.type = type = new TypeInfo(VARBINARY, precision, 0, null);
         }
         return type;
     }

@@ -1,9 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.util;
+
+import static org.h2.util.Bits.LONG_VH_BE;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -28,20 +30,22 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Properties;
+
 import javax.naming.Context;
 import javax.sql.DataSource;
+
 import org.h2.api.ErrorCode;
 import org.h2.api.JavaObjectSerializer;
-import org.h2.engine.CastDataProvider;
+import org.h2.engine.Constants;
 import org.h2.engine.SysProperties;
 import org.h2.jdbc.JdbcConnection;
 import org.h2.jdbc.JdbcPreparedStatement;
 import org.h2.message.DbException;
 import org.h2.tools.SimpleResultSet;
 import org.h2.util.Utils.ClassFactory;
-import org.h2.value.DataType;
 import org.h2.value.Value;
 import org.h2.value.ValueLob;
+import org.h2.value.ValueToObjectConverter;
 import org.h2.value.ValueUuid;
 
 /**
@@ -136,6 +140,7 @@ public class JdbcUtils {
      * perform access rights checking, the system property h2.allowedClasses
      * needs to be set to a list of class file name prefixes.
      *
+     * @param <Z> generic return type
      * @param className the name of the class
      * @return the class object
      */
@@ -165,6 +170,7 @@ public class JdbcUtils {
             for (String s : allowedClassNamePrefixes) {
                 if (className.startsWith(s)) {
                     allowed = true;
+                    break;
                 }
             }
             if (!allowed) {
@@ -261,17 +267,11 @@ public class JdbcUtils {
      * @param user the user name
      * @param password the password
      * @return the database connection
+     * @throws SQLException on failure
      */
     public static Connection getConnection(String driver, String url,
             String user, String password) throws SQLException {
-        Properties prop = new Properties();
-        if (user != null) {
-            prop.setProperty("user", user);
-        }
-        if (password != null) {
-            prop.setProperty("password", password);
-        }
-        return getConnection(driver, url, prop, null);
+        return getConnection(driver, url, user, password, null, false);
     }
 
     /**
@@ -279,20 +279,22 @@ public class JdbcUtils {
      *
      * @param driver the driver class name
      * @param url the database URL
-     * @param prop the properties containing at least the user name and password
+     * @param user the user name or {@code null}
+     * @param password the password or {@code null}
      * @param networkConnectionInfo the network connection information, or {@code null}
+     * @param forbidCreation whether database creation is forbidden
      * @return the database connection
+     * @throws SQLException on failure
      */
-    public static Connection getConnection(String driver, String url, Properties prop,
-            NetworkConnectionInfo networkConnectionInfo) throws SQLException {
-        Connection connection = getConnection(driver, url, prop);
-        if (networkConnectionInfo != null && connection instanceof JdbcConnection) {
-            ((JdbcConnection) connection).getSession().setNetworkConnectionInfo(networkConnectionInfo);
+    public static Connection getConnection(String driver, String url, String user, String password,
+            NetworkConnectionInfo networkConnectionInfo, boolean forbidCreation) throws SQLException {
+        if (url.startsWith(Constants.START_URL)) {
+            JdbcConnection connection = new JdbcConnection(url, null, user, password, forbidCreation);
+            if (networkConnectionInfo != null) {
+                connection.getSession().setNetworkConnectionInfo(networkConnectionInfo);
+            }
+            return connection;
         }
-        return connection;
-    }
-
-    private static Connection getConnection(String driver, String url, Properties prop) throws SQLException {
         if (StringUtils.isNullOrEmpty(driver)) {
             JdbcUtils.load(url);
         } else {
@@ -300,6 +302,13 @@ public class JdbcUtils {
             try {
                 if (java.sql.Driver.class.isAssignableFrom(d)) {
                     Driver driverInstance = (Driver) d.getDeclaredConstructor().newInstance();
+                    Properties prop = new Properties();
+                    if (user != null) {
+                        prop.setProperty("user", user);
+                    }
+                    if (password != null) {
+                        prop.setProperty("password", password);
+                    }
                     /*
                      * fix issue #695 with drivers with the same jdbc
                      * subprotocol in classpath of jdbc drivers (as example
@@ -311,11 +320,12 @@ public class JdbcUtils {
                     }
                     throw new SQLException("Driver " + driver + " is not suitable for " + url, "08001");
                 } else if (javax.naming.Context.class.isAssignableFrom(d)) {
+                    if (!url.startsWith("java:")) {
+                        throw new SQLException("Only java scheme is supported for JNDI lookups", "08001");
+                    }
                     // JNDI context
                     Context context = (Context) d.getDeclaredConstructor().newInstance();
                     DataSource ds = (DataSource) context.lookup(url);
-                    String user = prop.getProperty("user");
-                    String password = prop.getProperty("password");
                     if (StringUtils.isNullOrEmpty(user) && StringUtils.isNullOrEmpty(password)) {
                         return ds.getConnection();
                     }
@@ -326,7 +336,7 @@ public class JdbcUtils {
             }
             // don't know, but maybe it loaded a JDBC Driver
         }
-        return DriverManager.getConnection(url, prop);
+        return DriverManager.getConnection(url, user, password);
     }
 
     /**
@@ -439,13 +449,8 @@ public class JdbcUtils {
      * @throws DbException if serialization fails
      */
     public static ValueUuid deserializeUuid(byte[] data) {
-        uuid: if (data.length == 80) {
-            for (int i = 0; i < 64; i++) {
-                if (data[i] != UUID_PREFIX[i]) {
-                    break uuid;
-                }
-            }
-            return ValueUuid.get(Bits.readLong(data, 72), Bits.readLong(data, 64));
+        if (data.length == 80 && Arrays.mismatch(data, 0, 64, UUID_PREFIX, 0, 64) < 0) {
+            return ValueUuid.get((long) LONG_VH_BE.get(data, 72), (long) LONG_VH_BE.get(data, 64));
         }
         throw DbException.get(ErrorCode.DESERIALIZATION_FAILED_1, "Is not a UUID");
     }
@@ -453,16 +458,13 @@ public class JdbcUtils {
     /**
      * Set a value as a parameter in a prepared statement.
      *
-     * @param prep
-     *            the prepared statement
-     * @param parameterIndex
-     *            the parameter index
-     * @param value
-     *            the value
-     * @param provider
-     *            the cast information provider
+     * @param prep the prepared statement
+     * @param parameterIndex the parameter index
+     * @param value the value
+     * @param conn the own connection
+     * @throws SQLException on failure
      */
-    public static void set(PreparedStatement prep, int parameterIndex, Value value, CastDataProvider provider)
+    public static void set(PreparedStatement prep, int parameterIndex, Value value, JdbcConnection conn)
             throws SQLException {
         if (prep instanceof JdbcPreparedStatement) {
             if (value instanceof ValueLob) {
@@ -471,11 +473,11 @@ public class JdbcUtils {
                 prep.setObject(parameterIndex, value);
             }
         } else {
-            setOther(prep, parameterIndex, value, provider);
+            setOther(prep, parameterIndex, value, conn);
         }
     }
 
-    private static void setOther(PreparedStatement prep, int parameterIndex, Value value, CastDataProvider provider)
+    private static void setOther(PreparedStatement prep, int parameterIndex, Value value, JdbcConnection conn)
                 throws SQLException {
         int valueType = value.getValueType();
         switch (valueType) {
@@ -498,6 +500,7 @@ public class JdbcUtils {
             prep.setLong(parameterIndex, value.getLong());
             break;
         case Value.NUMERIC:
+        case Value.DECFLOAT:
             prep.setBigDecimal(parameterIndex, value.getBigDecimal());
             break;
         case Value.DOUBLE:
@@ -556,11 +559,12 @@ public class JdbcUtils {
             setLob(prep, parameterIndex, (ValueLob) value);
             break;
         case Value.ARRAY:
-            prep.setArray(parameterIndex, prep.getConnection().createArrayOf("NULL", (Object[]) value.getObject()));
+            prep.setArray(parameterIndex, prep.getConnection().createArrayOf("NULL",
+                    (Object[]) ValueToObjectConverter.valueToDefaultObject(value, conn, true)));
             break;
         case Value.JAVA_OBJECT:
             prep.setObject(parameterIndex,
-                    JdbcUtils.deserialize(value.getBytesNoCopy(), provider.getJavaObjectSerializer()),
+                    JdbcUtils.deserialize(value.getBytesNoCopy(), conn.getJavaObjectSerializer()),
                     Types.JAVA_OBJECT);
             break;
         case Value.UUID:
@@ -591,19 +595,17 @@ public class JdbcUtils {
             }
             break;
         default:
-            throw DbException.getUnsupportedException(DataType.getDataType(valueType).name);
+            throw DbException.getUnsupportedException(Value.getTypeName(valueType));
         }
     }
 
     private static void setLob(PreparedStatement prep, int parameterIndex, ValueLob value) throws SQLException {
-        long p = value.getPrecision();
-        if (p > Integer.MAX_VALUE) {
-            p = -1;
-        }
         if (value.getValueType() == Value.BLOB) {
-            prep.setBinaryStream(parameterIndex, value.getInputStream(), (int) p);
+            long p = value.octetLength();
+            prep.setBinaryStream(parameterIndex, value.getInputStream(), p > Integer.MAX_VALUE ? -1 : (int) p);
         } else {
-            prep.setCharacterStream(parameterIndex, value.getReader(), (int) p);
+            long p = value.charLength();
+            prep.setCharacterStream(parameterIndex, value.getReader(), p > Integer.MAX_VALUE ? -1 : (int) p);
         }
     }
 
@@ -613,6 +615,7 @@ public class JdbcUtils {
      * @param conn the connection
      * @param sql the SQL statement
      * @return the metadata
+     * @throws SQLException on failure
      */
     public static ResultSet getMetaResultSet(Connection conn, String sql)
             throws SQLException {
@@ -686,8 +689,8 @@ public class JdbcUtils {
             SimpleResultSet rs = new SimpleResultSet();
             rs.addColumn("Type", Types.VARCHAR, 0, 0);
             rs.addColumn("KB", Types.VARCHAR, 0, 0);
-            rs.addRow("Used Memory", Integer.toString(Utils.getMemoryUsed()));
-            rs.addRow("Free Memory", Integer.toString(Utils.getMemoryFree()));
+            rs.addRow("Used Memory", Long.toString(Utils.getMemoryUsed()));
+            rs.addRow("Free Memory", Long.toString(Utils.getMemoryFree()));
             return rs;
         } else if (isBuiltIn(sql, "@info")) {
             SimpleResultSet rs = new SimpleResultSet();
@@ -717,6 +720,9 @@ public class JdbcUtils {
         } else if (isBuiltIn(sql, "@super_types")) {
             String[] p = split(sql);
             return meta.getSuperTypes(p[1], p[2], p[3]);
+        } else if (isBuiltIn(sql, "@pseudo_columns")) {
+            String[] p = split(sql);
+            return meta.getPseudoColumns(p[1], p[2], p[3], p[4]);
         }
         return null;
     }

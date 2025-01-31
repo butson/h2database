@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -12,8 +12,8 @@ insert into test values (1), (2), (3), (4), (5), (6), (7), (8), (9), (10), (11),
 > update count: 12
 
 select max(v), max(v) filter (where v <= 8) from test where v <= 10;
-> MAX(V) MAX(V) FILTER (WHERE (V <= 8))
-> ------ ------------------------------
+> MAX(V) MAX(V) FILTER (WHERE V <= 8)
+> ------ ----------------------------
 > 10     8
 > rows: 1
 
@@ -21,14 +21,14 @@ create index test_idx on test(v);
 > ok
 
 select max(v), max(v) filter (where v <= 8) from test where v <= 10;
-> MAX(V) MAX(V) FILTER (WHERE (V <= 8))
-> ------ ------------------------------
+> MAX(V) MAX(V) FILTER (WHERE V <= 8)
+> ------ ----------------------------
 > 10     8
 > rows: 1
 
 select max(v), max(v) filter (where v <= 8) from test;
-> MAX(V) MAX(V) FILTER (WHERE (V <= 8))
-> ------ ------------------------------
+> MAX(V) MAX(V) FILTER (WHERE V <= 8)
+> ------ ----------------------------
 > 12     8
 > rows: 1
 
@@ -67,3 +67,45 @@ SELECT MAX(X) FROM SYSTEM_RANGE(1, 2, -1);
 
 SELECT MAX(X) FROM SYSTEM_RANGE(2, 1, -1);
 >> 2
+
+CREATE TABLE TEST(ID INT);
+> ok
+
+INSERT INTO TEST VALUES 10, 40, 20, 50;
+> update count: 4
+
+SELECT MAX(_ROWID_) FROM TEST;
+>> 4
+
+EXPLAIN SELECT MAX(_ROWID_) FROM TEST;
+>> SELECT MAX(_ROWID_) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */ /* direct lookup */
+
+DELETE FROM TEST WHERE ID IN (10, 50);
+> update count: 2
+
+SELECT MAX(_ROWID_) FROM TEST;
+>> 3
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(ID INT PRIMARY KEY);
+> ok
+
+INSERT INTO TEST VALUES 10, 40, 20, 50;
+> update count: 4
+
+SELECT MAX(_ROWID_) FROM TEST;
+>> 50
+
+EXPLAIN SELECT MAX(_ROWID_) FROM TEST;
+>> SELECT MAX(_ROWID_) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */ /* direct lookup */
+
+DELETE FROM TEST WHERE ID IN (10, 50);
+> update count: 2
+
+SELECT MAX(_ROWID_) FROM TEST;
+>> 40
+
+DROP TABLE TEST;
+> ok

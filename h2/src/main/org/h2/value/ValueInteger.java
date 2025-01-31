@@ -1,9 +1,14 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
+
+import static org.h2.util.Bits.INT_VH_BE;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.CastDataProvider;
@@ -15,9 +20,14 @@ import org.h2.message.DbException;
 public final class ValueInteger extends Value {
 
     /**
-     * The precision in digits.
+     * The precision in bits.
      */
-    public static final int PRECISION = 10;
+    public static final int PRECISION = 32;
+
+    /**
+     * The approximate precision in decimal digits.
+     */
+    public static final int DECIMAL_PRECISION = 10;
 
     /**
      * The maximum display size of an INT.
@@ -97,7 +107,7 @@ public final class ValueInteger extends Value {
     }
 
     @Override
-    public Value divide(Value v, long divisorPrecision) {
+    public Value divide(Value v, TypeInfo quotientType) {
         int y = ((ValueInteger) v).value;
         if (y == 0) {
             throw DbException.get(ErrorCode.DIVISION_BY_ZERO_1, getTraceSQL());
@@ -134,12 +144,39 @@ public final class ValueInteger extends Value {
     }
 
     @Override
+    public byte[] getBytes() {
+        byte[] b = new byte[4];
+        INT_VH_BE.set(b, 0, getInt());
+        return b;
+    }
+
+    @Override
     public int getInt() {
         return value;
     }
 
     @Override
     public long getLong() {
+        return value;
+    }
+
+    @Override
+    public BigInteger getBigInteger() {
+        return BigInteger.valueOf(value);
+    }
+
+    @Override
+    public BigDecimal getBigDecimal() {
+        return BigDecimal.valueOf(value);
+    }
+
+    @Override
+    public float getFloat() {
+        return value;
+    }
+
+    @Override
+    public double getDouble() {
         return value;
     }
 
@@ -155,11 +192,6 @@ public final class ValueInteger extends Value {
 
     @Override
     public int hashCode() {
-        return value;
-    }
-
-    @Override
-    public Object getObject() {
         return value;
     }
 

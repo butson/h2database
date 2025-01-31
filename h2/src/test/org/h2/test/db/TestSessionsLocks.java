@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -30,9 +30,6 @@ public class TestSessionsLocks extends TestDb {
 
     @Override
     public boolean isEnabled() {
-        if (!config.mvStore) {
-            return false;
-        }
         return true;
     }
 
@@ -63,24 +60,13 @@ public class TestSessionsLocks extends TestDb {
         assertEquals("PUBLIC", rs.getString("TABLE_SCHEMA"));
         assertEquals("TEST", rs.getString("TABLE_NAME"));
         rs.getString("SESSION_ID");
-        if (config.mvStore) {
-            assertEquals("READ", rs.getString("LOCK_TYPE"));
-        } else {
-            assertEquals("WRITE", rs.getString("LOCK_TYPE"));
-        }
+        assertEquals("READ", rs.getString("LOCK_TYPE"));
         assertFalse(rs.next());
         conn2.commit();
         conn2.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
         stat2.execute("SELECT * FROM TEST");
         rs = stat.executeQuery("select * from information_schema.locks " +
                 "order by session_id");
-        if (!config.mvStore) {
-            rs.next();
-            assertEquals("PUBLIC", rs.getString("TABLE_SCHEMA"));
-            assertEquals("TEST", rs.getString("TABLE_NAME"));
-            rs.getString("SESSION_ID");
-            assertEquals("READ", rs.getString("LOCK_TYPE"));
-        }
         assertFalse(rs.next());
         conn2.commit();
         rs = stat.executeQuery("select * from information_schema.locks " +
@@ -96,22 +82,22 @@ public class TestSessionsLocks extends TestDb {
         Statement stat = conn.createStatement();
         ResultSet rs;
         rs = stat.executeQuery("select * from information_schema.sessions " +
-                "order by SESSION_START, ID");
+                "order by SESSION_START, SESSION_ID");
         rs.next();
-        int sessionId = rs.getInt("ID");
+        int sessionId = rs.getInt("SESSION_ID");
         rs.getString("USER_NAME");
         rs.getTimestamp("SESSION_START");
-        rs.getString("STATEMENT");
-        rs.getTimestamp("STATEMENT_START");
+        rs.getString("EXECUTING_STATEMENT");
+        rs.getTimestamp("EXECUTING_STATEMENT_START");
         assertFalse(rs.next());
         Connection conn2 = getConnection("sessionsLocks");
         Statement stat2 = conn2.createStatement();
         rs = stat.executeQuery("select * from information_schema.sessions " +
-                "order by SESSION_START, ID");
+                "order by SESSION_START, SESSION_ID");
         assertTrue(rs.next());
-        assertEquals(sessionId, rs.getInt("ID"));
+        assertEquals(sessionId, rs.getInt("SESSION_ID"));
         assertTrue(rs.next());
-        int otherId = rs.getInt("ID");
+        int otherId = rs.getInt("SESSION_ID");
         assertTrue(otherId != sessionId);
         assertFalse(rs.next());
         stat2.execute("set throttle 1");

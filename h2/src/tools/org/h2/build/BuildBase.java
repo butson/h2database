@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -327,7 +327,7 @@ public class BuildBase {
         sysOut.println();
     }
 
-    private static boolean isWindows() {
+    protected static boolean isWindows() {
         return System.getProperty("os.name").toLowerCase().contains("windows");
     }
 
@@ -436,24 +436,6 @@ public class BuildBase {
     }
 
     /**
-     * Reads the value from a static method of a class using reflection.
-     *
-     * @param className the name of the class
-     * @param methodName the field name
-     * @return the value as a string
-     */
-    protected static String getStaticValue(String className, String methodName) {
-        try {
-            Class<?> clazz = Class.forName(className);
-            Method method = clazz.getMethod(methodName);
-            return method.invoke(null).toString();
-        } catch (Exception e) {
-            throw new RuntimeException("Can not read value " + className + "."
-                    + methodName + "()", e);
-        }
-    }
-
-    /**
      * Copy files to the specified target directory.
      *
      * @param targetDir the target directory
@@ -540,7 +522,12 @@ public class BuildBase {
                         "Generating ",
                 }));
             }
-            Class<?> clazz = Class.forName("com.sun.tools.javadoc.Main");
+            Class<?> clazz;
+            try {
+                clazz = Class.forName("jdk.javadoc.internal.tool.Main");
+            } catch (Exception e) {
+                clazz = Class.forName("com.sun.tools.javadoc.Main");
+            }
             Method execute = clazz.getMethod("execute", String[].class);
             result = (Integer) invoke(execute, null, new Object[] { args });
         } catch (Exception e) {
@@ -592,7 +579,7 @@ public class BuildBase {
      */
     protected void downloadUsingMaven(String target, String group,
             String artifact, String version, String sha1Checksum) {
-        String repoDir = "http://repo1.maven.org/maven2";
+        String repoDir = "https://repo1.maven.org/maven2";
         Path targetFile = Paths.get(target);
         if (Files.exists(targetFile)) {
             return;
@@ -662,7 +649,7 @@ public class BuildBase {
             int len = 0;
             while (true) {
                 long now = System.nanoTime();
-                if (now > last + TimeUnit.SECONDS.toNanos(1)) {
+                if (now - last > 1_000_000_000L) {
                     println("Downloaded " + len + " bytes");
                     last = now;
                 }
@@ -899,14 +886,9 @@ public class BuildBase {
      * @return the Java version (8, 9, 10, 11, 12, 13, etc)
      */
     public static int getJavaVersion() {
-        int version = 8;
+        int version = 11;
         String v = getJavaSpecVersion();
         if (v != null) {
-            int idx = v.indexOf('.');
-            if (idx >= 0) {
-                // 1.8
-                v = v.substring(idx + 1);
-            }
             version = Integer.parseInt(v);
         }
         return version;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -18,11 +18,11 @@ public final class ExtTypeInfoGeometry extends ExtTypeInfo {
 
     private final Integer srid;
 
-    static String toSQL(int type, Integer srid) {
+    static StringBuilder toSQL(StringBuilder builder, int type, Integer srid) {
         if (type == 0 && srid == null) {
-            return "";
+            return builder;
         }
-        StringBuilder builder = new StringBuilder().append('(');
+        builder.append('(');
         if (type == 0) {
             builder.append("GEOMETRY");
         } else {
@@ -31,7 +31,7 @@ public final class ExtTypeInfoGeometry extends ExtTypeInfo {
         if (srid != null) {
             builder.append(", ").append((int) srid);
         }
-        return builder.append(')').toString();
+        return builder.append(')');
     }
 
     /**
@@ -66,8 +66,8 @@ public final class ExtTypeInfoGeometry extends ExtTypeInfo {
     }
 
     @Override
-    public String getCreateSQL() {
-        return toSQL(type, srid);
+    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+        return toSQL(builder, type, srid);
     }
 
     /**

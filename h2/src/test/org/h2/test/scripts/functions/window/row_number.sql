@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -198,7 +198,7 @@ EXPLAIN SELECT ROW_NUMBER() OVER (ORDER BY 'a') FROM TEST;
 >> SELECT ROW_NUMBER() OVER () FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
 
 EXPLAIN SELECT RANK() OVER (ORDER BY 'a') FROM TEST;
->> SELECT 1 FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
+>> SELECT CAST(1 AS BIGINT) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
 
 SELECT RANK() OVER (ORDER BY 'a') FROM TEST;
 > 1
@@ -209,7 +209,7 @@ SELECT RANK() OVER (ORDER BY 'a') FROM TEST;
 > rows: 3
 
 EXPLAIN SELECT DENSE_RANK() OVER (ORDER BY 'a') FROM TEST;
->> SELECT 1 FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
+>> SELECT CAST(1 AS BIGINT) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
 
 SELECT DENSE_RANK() OVER (ORDER BY 'a') FROM TEST;
 > 1

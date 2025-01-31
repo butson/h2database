@@ -1,10 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.build.doc;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -41,10 +42,17 @@ public class LinkChecker {
         "#functions_index",
         "#functions_aggregate_index",
         "#functions_window_index",
-        "#tutorial_index"
+        "#tutorial_index",
+        "docs/javadoc/"
     };
 
-    private final HashMap<String, String> targets = new HashMap<>();
+    private static enum TargetKind {
+        FILE, ID
+    }
+    private final HashMap<String, TargetKind> targets = new HashMap<>();
+    /**
+     * Map of source link (i.e. <a> tag) in the document, to the document path
+     */
     private final HashMap<String, String> links = new HashMap<>();
 
     /**
@@ -130,7 +138,8 @@ public class LinkChecker {
     private void listBadLinks() throws Exception {
         ArrayList<String> errors = new ArrayList<>();
         for (String link : links.keySet()) {
-            if (!link.startsWith("http") && !link.endsWith("h2.pdf")) {
+            if (!link.startsWith("http") && !link.endsWith("h2.pdf")
+                    && /* For Javadoc 8 */ !link.startsWith("docs/javadoc")) {
                 if (targets.get(link) == null) {
                     errors.add(links.get(link) + ": Link missing " + link);
                 }
@@ -142,7 +151,7 @@ public class LinkChecker {
             }
         }
         for (String name : targets.keySet()) {
-            if (targets.get(name).equals("id")) {
+            if (targets.get(name) == TargetKind.ID) {
                 boolean ignore = false;
                 for (String to : IGNORE_MISSING_LINKS_TO) {
                     if (name.contains(to)) {
@@ -159,7 +168,7 @@ public class LinkChecker {
         for (String error : errors) {
             System.out.println(error);
         }
-        if (errors.size() > 0) {
+        if (!errors.isEmpty()) {
             throw new Exception("Problems where found by the Link Checker");
         }
     }
@@ -181,14 +190,15 @@ public class LinkChecker {
      */
     void processFile(Path file) throws IOException {
         String path = file.toString();
-        targets.put(path, "file");
+        targets.put(path, TargetKind.FILE);
         String fileName = file.getFileName().toString();
         String lower = StringUtils.toLowerEnglish(fileName);
         if (!lower.endsWith(".html") && !lower.endsWith(".htm")) {
             return;
         }
         Path parent = file.getParent();
-        String html = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        final String html = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        // find all the target fragments in the document (those elements marked with id attribute)
         int idx = -1;
         while (true) {
             idx = html.indexOf(" id=\"", idx + 1);
@@ -202,9 +212,11 @@ public class LinkChecker {
             }
             String ref = html.substring(start, end);
             if (!ref.startsWith("_")) {
-                targets.put(path + "#" + ref, "id");
+                targets.put(path + "#" + ref.replaceAll("%3C|&lt;", "<").replaceAll("%3E|&gt;", ">"), //
+                        TargetKind.ID);
             }
         }
+        // find all the href links in the document
         idx = -1;
         while (true) {
             idx = html.indexOf(" href=\"", idx + 1);
@@ -240,10 +252,13 @@ public class LinkChecker {
                         p = p.getParent();
                     }
                 }
-                ref = p + "/" + ref;
+                ref = p + File.separator + ref;
             }
             if (ref != null) {
-                links.put(ref, path);
+                links.put(ref.replace('/', File.separatorChar) //
+                        .replaceAll("%5B", "[").replaceAll("%5D", "]") //
+                        .replaceAll("%3C", "<").replaceAll("%3E", ">"), //
+                        path);
             }
         }
         idx = -1;
@@ -269,8 +284,9 @@ public class LinkChecker {
             if (type.equals("href")) {
                 // already checked
             } else if (type.equals("id")) {
-                targets.put(path + "#" + ref, "id");
-            } else {
+                // For Javadoc 8
+                targets.put(path + "#" + ref, TargetKind.ID);
+            } else if (!type.equals("name")) {
                 error(fileName, "Unsupported <a ?: " + html.substring(idx, idx + 100));
             }
         }

@@ -1,4 +1,5 @@
-# Welcome to H2, the Java SQL database. [![Build Status](https://travis-ci.org/h2database/h2database.svg?branch=master)](https://travis-ci.org/h2database/h2database)
+[![CI](h2/src/docsrc/images/h2-logo-2.png)](https://github.com/h2database/h2database/actions?query=workflow%3ACI)
+# Welcome to H2, the Java SQL database.
 
 ## The main features of H2 are:
 
@@ -8,7 +9,7 @@
 * Browser based Console application
 * Encrypted databases
 * Fulltext search
-* Pure Java with small footprint: around 2 MB jar file size
+* Pure Java with small footprint: around 2.5 MB jar file size
 * ODBC driver
 
 More information: https://h2database.com
@@ -21,7 +22,7 @@ More information: https://h2database.com
 <dependency>
     <groupId>com.h2database</groupId>
     <artifactId>h2</artifactId>
-    <version>1.4.200</version>
+    <version>2.3.232</version>
 </dependency>
 ```
 
@@ -35,5 +36,5 @@ More information: https://h2database.com
 ## Support
 
 * [Issue tracker](https://github.com/h2database/h2database/issues) for bug reports and feature requests
-* [Mailing list / forum](https://groups.google.com/forum/#!forum/h2-database) for questions about H2
+* [Mailing list / forum](https://groups.google.com/g/h2-database) for questions about H2
 * ['h2' tag on Stack Overflow](https://stackoverflow.com/questions/tagged/h2) for other questions (Hibernate with H2 etc.)

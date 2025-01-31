@@ -1,10 +1,13 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
 
+import static org.h2.util.Bits.LONG_VH_BE;
+
+import java.time.Instant;
 import java.util.UUID;
 
 import org.h2.api.ErrorCode;
@@ -45,16 +48,30 @@ public final class ValueUuid extends Value {
     /**
      * Create a new UUID using the pseudo random number generator.
      *
+     * @param version
+     *            a version to use
      * @return the new UUID
      */
-    public static ValueUuid getNewRandom() {
-        long high = MathUtils.secureRandomLong();
-        long low = MathUtils.secureRandomLong();
-        // version 4 (random)
-        high = (high & (~0xf000L)) | 0x4000L;
-        // variant (Leach-Salz)
-        low = (low & 0x3fff_ffff_ffff_ffffL) | 0x8000_0000_0000_0000L;
-        return new ValueUuid(high, low);
+    public static ValueUuid getNewRandom(int version) {
+        long high, low;
+        switch (version) {
+        case 4:
+            high = MathUtils.secureRandomLong();
+            low = MathUtils.secureRandomLong();
+            break;
+        case 7: {
+            Instant now = Instant.now();
+            int nanos = now.getNano();
+            int sub = nanos % 1_000_000 * 2_000 / 488_281;
+            high = now.getEpochSecond() * 1_000L + nanos / 1_000_000 << 16 | sub;
+            low = MathUtils.secureRandomLong();
+            break;
+        }
+        default:
+            throw DbException.getInvalidValueException("RANDOM_UUID version", version);
+        }
+        return new ValueUuid((high & ~0xf000L) | version << 12,
+                /* variant 0b10 */ low & 0x3fff_ffff_ffff_ffffL | 0x8000_0000_0000_0000L);
     }
 
     /**
@@ -68,7 +85,7 @@ public final class ValueUuid extends Value {
         if (length != 16) {
             throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, "UUID requires 16 bytes, got " + length);
         }
-        return get(Bits.readLong(binary, 0), Bits.readLong(binary, 8));
+        return get((long) LONG_VH_BE.get(binary, 0), (long) LONG_VH_BE.get(binary, 8));
     }
 
     /**
@@ -129,10 +146,7 @@ public final class ValueUuid extends Value {
 
     @Override
     public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        if ((sqlFlags & NO_CASTS) == 0) {
-            return addString(builder.append("CAST('")).append("' AS UUID)");
-        }
-        return addString(builder.append('\'')).append('\'');
+        return addString(builder.append("UUID '")).append('\'');
     }
 
     @Override
@@ -155,6 +169,11 @@ public final class ValueUuid extends Value {
         return addString(new StringBuilder(36)).toString();
     }
 
+    @Override
+    public byte[] getBytes() {
+        return Bits.uuidToBytes(high, low);
+    }
+
     private StringBuilder addString(StringBuilder builder) {
         StringUtils.appendHex(builder, high >> 32, 4).append('-');
         StringUtils.appendHex(builder, high >> 16, 2).append('-');
@@ -169,21 +188,8 @@ public final class ValueUuid extends Value {
             return 0;
         }
         ValueUuid v = (ValueUuid) o;
-        long v1 = high, v2 = v.high;
-        if (v1 == v2) {
-            v1 = low;
-            v2 = v.low;
-            if (mode.isUuidUnsigned()) {
-                v1 += Long.MIN_VALUE;
-                v2 += Long.MIN_VALUE;
-            }
-            return Long.compare(v1, v2);
-        }
-        if (mode.isUuidUnsigned()) {
-            v1 += Long.MIN_VALUE;
-            v2 += Long.MIN_VALUE;
-        }
-        return v1 > v2 ? 1 : -1;
+        int cmp = Long.compareUnsigned(high, v.high);
+        return cmp != 0 ? cmp : Long.compareUnsigned(low, v.low);
     }
 
     @Override
@@ -195,14 +201,13 @@ public final class ValueUuid extends Value {
         return high == v.high && low == v.low;
     }
 
-    @Override
-    public Object getObject() {
+    /**
+     * Returns the UUID.
+     *
+     * @return the UUID
+     */
+    public UUID getUuid() {
         return new UUID(high, low);
-    }
-
-    @Override
-    public byte[] getBytes() {
-        return Bits.uuidToBytes(high, low);
     }
 
     /**
@@ -221,6 +226,16 @@ public final class ValueUuid extends Value {
      */
     public long getLow() {
         return low;
+    }
+
+    @Override
+    public long charLength() {
+        return DISPLAY_SIZE;
+    }
+
+    @Override
+    public long octetLength() {
+        return PRECISION;
     }
 
 }

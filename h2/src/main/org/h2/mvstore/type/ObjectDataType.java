@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -413,7 +413,11 @@ public class ObjectDataType extends BasicDataType<Object> {
      */
     abstract static class AutoDetectDataType<T> extends BasicDataType<T> {
 
-        protected final ObjectDataType base;
+        private final ObjectDataType base;
+
+        /**
+         * The type id.
+         */
         final int typeId;
 
         AutoDetectDataType(int typeId) {
@@ -1354,11 +1358,9 @@ public class ObjectDataType extends BasicDataType<Object> {
                         x = Integer.signum((((boolean[]) aObj)[i] ? 1 : 0)
                                 - (((boolean[]) bObj)[i] ? 1 : 0));
                     } else if (type == char.class) {
-                        x = Integer.signum((((char[]) aObj)[i])
-                                - (((char[]) bObj)[i]));
+                        x = Integer.signum(((char[]) aObj)[i] - ((char[]) bObj)[i]);
                     } else if (type == short.class) {
-                        x = Integer.signum((((short[]) aObj)[i])
-                                - (((short[]) bObj)[i]));
+                        x = Integer.signum(((short[]) aObj)[i] - ((short[]) bObj)[i]);
                     } else if (type == int.class) {
                         int a = ((int[]) aObj)[i];
                         int b = ((int[]) bObj)[i];
@@ -1588,7 +1590,7 @@ public class ObjectDataType extends BasicDataType<Object> {
             int size = data.length * 2;
             // adjust the average size
             // using an exponential moving average
-            averageSize = (size + 15 * averageSize) / 16;
+            averageSize = (int) ((size + 15L * averageSize) / 16);
             buff.put((byte) TYPE_SERIALIZED_OBJECT).putVarInt(data.length)
                     .put(data);
         }
@@ -1605,7 +1607,7 @@ public class ObjectDataType extends BasicDataType<Object> {
             int size = data.length * 2;
             // adjust the average size
             // using an exponential moving average
-            averageSize = (size + 15 * averageSize) / 16;
+            averageSize = (int) ((size + 15L * averageSize) / 16);
             buff.get(data);
             return deserialize(data);
         }

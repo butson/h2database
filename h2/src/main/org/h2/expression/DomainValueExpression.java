@@ -1,23 +1,23 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
 import org.h2.api.ErrorCode;
-import org.h2.command.Parser;
 import org.h2.constraint.DomainColumnResolver;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.table.ColumnResolver;
+import org.h2.util.ParserUtil;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 
 /**
  * An expression representing a value for domain constraint.
  */
-public class DomainValueExpression extends Operation0 {
+public final class DomainValueExpression extends Operation0 {
 
     private DomainColumnResolver columnResolver;
 
@@ -25,7 +25,7 @@ public class DomainValueExpression extends Operation0 {
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         return columnResolver.getValue(null);
     }
 
@@ -42,7 +42,7 @@ public class DomainValueExpression extends Operation0 {
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         if (columnResolver == null) {
             throw DbException.get(ErrorCode.COLUMN_NOT_FOUND_1, "VALUE");
         }
@@ -51,15 +51,15 @@ public class DomainValueExpression extends Operation0 {
 
     @Override
     public boolean isValueSet() {
-        return true;
+        return columnResolver.getValue(null) != null;
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
         if (columnResolver != null) {
             String name = columnResolver.getColumnName();
             if (name != null) {
-                return Parser.quoteIdentifier(builder, name, sqlFlags);
+                return ParserUtil.quoteIdentifier(builder, name, sqlFlags);
             }
         }
         return builder.append("VALUE");
@@ -67,22 +67,7 @@ public class DomainValueExpression extends Operation0 {
 
     @Override
     public boolean isEverything(ExpressionVisitor visitor) {
-        switch (visitor.getType()) {
-        case ExpressionVisitor.OPTIMIZABLE_AGGREGATE:
-        case ExpressionVisitor.DETERMINISTIC:
-        case ExpressionVisitor.READONLY:
-        case ExpressionVisitor.INDEPENDENT:
-        case ExpressionVisitor.EVALUATABLE:
-        case ExpressionVisitor.SET_MAX_DATA_MODIFICATION_ID:
-        case ExpressionVisitor.NOT_FROM_RESOLVER:
-        case ExpressionVisitor.GET_DEPENDENCIES:
-        case ExpressionVisitor.QUERY_COMPARABLE:
-        case ExpressionVisitor.GET_COLUMNS1:
-        case ExpressionVisitor.GET_COLUMNS2:
-            return true;
-        default:
-            throw DbException.throwInternalError("type=" + visitor.getType());
-        }
+        return true;
     }
 
     @Override

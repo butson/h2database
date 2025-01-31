@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,10 +9,11 @@ import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import org.h2.api.ErrorCode;
 import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionColumn;
 import org.h2.expression.ExpressionVisitor;
+import org.h2.expression.SearchedCase;
 import org.h2.expression.TypedValueExpression;
 import org.h2.expression.ValueExpression;
 import org.h2.index.IndexCondition;
@@ -21,6 +22,7 @@ import org.h2.table.ColumnResolver;
 import org.h2.table.TableFilter;
 import org.h2.value.CompareMode;
 import org.h2.value.DataType;
+import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 import org.h2.value.ValueBoolean;
 import org.h2.value.ValueNull;
@@ -30,7 +32,7 @@ import org.h2.value.ValueVarcharIgnoreCase;
 /**
  * Pattern matching comparison expression: WHERE NAME LIKE ?
  */
-public class CompareLike extends Condition {
+public final class CompareLike extends Condition {
 
     /**
      * The type of comparison.
@@ -59,6 +61,11 @@ public class CompareLike extends Condition {
 
     private final LikeType likeType;
     private Expression left;
+
+    private final boolean not;
+
+    private final boolean whenOperand;
+
     private Expression right;
     private Expression escape;
 
@@ -82,16 +89,19 @@ public class CompareLike extends Condition {
     /** indicates that we can shortcut the comparison and use contains */
     private boolean shortcutToContains;
 
-    public CompareLike(Database db, Expression left, Expression right, Expression escape, LikeType likeType) {
-        this(db.getCompareMode(), db.getSettings().defaultEscape, left, right, escape, likeType);
+    public CompareLike(Database db, Expression left, boolean not, boolean whenOperand, Expression right,
+            Expression escape, LikeType likeType) {
+        this(db.getCompareMode(), db.getSettings().defaultEscape, left, not, whenOperand, right, escape, likeType);
     }
 
-    public CompareLike(CompareMode compareMode, String defaultEscape, Expression left, Expression right,
-            Expression escape, LikeType likeType) {
+    public CompareLike(CompareMode compareMode, String defaultEscape, Expression left, boolean not,
+            boolean whenOperand, Expression right, Expression escape, LikeType likeType) {
         this.compareMode = compareMode;
         this.defaultEscape = defaultEscape;
         this.likeType = likeType;
         this.left = left;
+        this.not = not;
+        this.whenOperand = whenOperand;
         this.right = right;
         this.escape = escape;
     }
@@ -101,33 +111,51 @@ public class CompareLike extends Condition {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        builder.append('(');
+    public boolean needParentheses() {
+        return true;
+    }
+
+    @Override
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
+        return getWhenSQL(left.getSQL(builder, sqlFlags, AUTO_PARENTHESES), sqlFlags);
+    }
+
+    @Override
+    public StringBuilder getWhenSQL(StringBuilder builder, int sqlFlags) {
+        if (not) {
+            builder.append(" NOT");
+        }
         switch (likeType) {
         case LIKE:
         case ILIKE:
-            left.getSQL(builder, sqlFlags).append(likeType == LikeType.LIKE ? " LIKE " : " ILIKE ");
-            right.getSQL(builder, sqlFlags);
+            builder.append(likeType == LikeType.LIKE ? " LIKE " : " ILIKE ");
+            right.getSQL(builder, sqlFlags, AUTO_PARENTHESES);
             if (escape != null) {
-                escape.getSQL(builder.append(" ESCAPE "), sqlFlags);
+                escape.getSQL(builder.append(" ESCAPE "), sqlFlags, AUTO_PARENTHESES);
             }
             break;
         case REGEXP:
-            left.getSQL(builder, sqlFlags).append(" REGEXP ");
-            right.getSQL(builder, sqlFlags);
+            builder.append(" REGEXP ");
+            right.getSQL(builder, sqlFlags, AUTO_PARENTHESES);
             break;
         default:
             throw DbException.getUnsupportedException(likeType.name());
         }
-        return builder.append(')');
+        return builder;
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         left = left.optimize(session);
         right = right.optimize(session);
         if (likeType == LikeType.ILIKE || left.getType().getValueType() == Value.VARCHAR_IGNORECASE) {
             ignoreCase = true;
+        }
+        if (escape != null) {
+            escape = escape.optimize(session);
+        }
+        if (whenOperand) {
+            return this;
         }
         if (left.isValueSet()) {
             Value l = left.getValue(session);
@@ -135,9 +163,6 @@ public class CompareLike extends Condition {
                 // NULL LIKE something > NULL
                 return TypedValueExpression.UNKNOWN;
             }
-        }
-        if (escape != null) {
-            escape = escape.optimize(session);
         }
         if (right.isValueSet() && (escape == null || escape.isValueSet())) {
             if (left.isValueSet()) {
@@ -157,15 +182,17 @@ public class CompareLike extends Condition {
             if (invalidPattern) {
                 return TypedValueExpression.UNKNOWN;
             }
-            if ("%".equals(p)) {
-                // optimization for X LIKE '%': convert to X IS NOT NULL
-                return new NullPredicate(left, true).optimize(session);
+            if (likeType != LikeType.REGEXP && "%".equals(p)) {
+                // optimization for X LIKE '%'
+                return new SearchedCase(new Expression[] { new NullPredicate(left, true, false),
+                        ValueExpression.getBoolean(!not), TypedValueExpression.UNKNOWN }).optimize(session);
             }
             if (isFullMatch()) {
                 // optimization for X LIKE 'Hello': convert to X = 'Hello'
                 Value value = ignoreCase ? ValueVarcharIgnoreCase.get(patternString) : ValueVarchar.get(patternString);
                 Expression expr = ValueExpression.get(value);
-                return new Comparison(Comparison.EQUAL, left, expr).optimize(session);
+                return new Comparison(not ? Comparison.NOT_EQUAL : Comparison.EQUAL, left, expr, false)
+                        .optimize(session);
             }
             isInit = true;
         }
@@ -191,18 +218,13 @@ public class CompareLike extends Condition {
     }
 
     @Override
-    public void createIndexConditions(Session session, TableFilter filter) {
-        if (likeType == LikeType.REGEXP) {
-            return;
-        }
-        if (!(left instanceof ExpressionColumn)) {
+    public void createIndexConditions(SessionLocal session, TableFilter filter) {
+        if (not || whenOperand || likeType == LikeType.REGEXP || !(left instanceof ExpressionColumn)) {
             return;
         }
         ExpressionColumn l = (ExpressionColumn) left;
-        if (ignoreCase && l.getType().getValueType() != Value.VARCHAR_IGNORECASE) {
-            return;
-        }
-        if (filter != l.getTableFilter()) {
+        if (filter != l.getTableFilter() || !TypeInfo.haveSameOrdering(l.getType(),
+                ignoreCase ? TypeInfo.TYPE_VARCHAR_IGNORECASE : TypeInfo.TYPE_VARCHAR)) {
             return;
         }
         // parameters are always evaluatable, but
@@ -213,8 +235,7 @@ public class CompareLike extends Condition {
         if (!right.isEverything(ExpressionVisitor.INDEPENDENT_VISITOR)) {
             return;
         }
-        if (escape != null &&
-                !escape.isEverything(ExpressionVisitor.INDEPENDENT_VISITOR)) {
+        if (escape != null && !escape.isEverything(ExpressionVisitor.INDEPENDENT_VISITOR)) {
             return;
         }
         String p = right.getValue(session).getString();
@@ -222,7 +243,7 @@ public class CompareLike extends Condition {
             Value e = escape == null ? null : escape.getValue(session);
             if (e == ValueNull.INSTANCE) {
                 // should already be optimized
-                DbException.throwInternalError();
+                throw DbException.getInternalError();
             }
             initPattern(p, getEscapeChar(e));
         }
@@ -273,9 +294,20 @@ public class CompareLike extends Condition {
     }
 
     @Override
-    public Value getValue(Session session) {
-        Value l = left.getValue(session);
-        if (l == ValueNull.INSTANCE) {
+    public Value getValue(SessionLocal session) {
+        return getValue(session, left.getValue(session));
+    }
+
+    @Override
+    public boolean getWhenValue(SessionLocal session, Value left) {
+        if (!whenOperand) {
+            return super.getWhenValue(session, left);
+        }
+        return getValue(session, left).isTrue();
+    }
+
+    private Value getValue(SessionLocal session, Value left) {
+        if (left == ValueNull.INSTANCE) {
             return ValueNull.INSTANCE;
         }
         if (!isInit) {
@@ -293,7 +325,7 @@ public class CompareLike extends Condition {
         if (invalidPattern) {
             return ValueNull.INSTANCE;
         }
-        String value = l.getString();
+        String value = left.getString();
         boolean result;
         if (likeType == LikeType.REGEXP) {
             result = patternRegexp.matcher(value).find();
@@ -312,7 +344,7 @@ public class CompareLike extends Condition {
         } else {
             result = compareAt(value, 0, 0, value.length(), patternChars, patternTypes);
         }
-        return ValueBoolean.get(result);
+        return ValueBoolean.get(not ^ result);
     }
 
     private static boolean containsIgnoreCase(String src, String what) {
@@ -366,7 +398,7 @@ public class CompareLike extends Condition {
                 }
                 return false;
             default:
-                DbException.throwInternalError(Integer.toString(types[pi]));
+                throw DbException.getInternalError(Integer.toString(types[pi]));
             }
         }
         return si == sLen;
@@ -376,6 +408,11 @@ public class CompareLike extends Condition {
         return pattern[pi] == s.charAt(si) ||
                 (!fastCompare && compareMode.equalsChars(patternString, pi, s,
                         si, ignoreCase));
+    }
+
+    @Override
+    public boolean isWhenConditionOperand() {
+        return whenOperand;
     }
 
     /**
@@ -388,13 +425,29 @@ public class CompareLike extends Condition {
      */
     public boolean test(String testPattern, String value, char escapeChar) {
         initPattern(testPattern, escapeChar);
+        return test(value);
+    }
+
+    /**
+     * Test if the value matches the initialized pattern.
+     *
+     * @param value the value
+     * @return true if the value matches
+     */
+    public boolean test(String value) {
         if (invalidPattern) {
             return false;
         }
         return compareAt(value, 0, 0, value.length(), patternChars, patternTypes);
     }
 
-    private void initPattern(String p, Character escapeChar) {
+    /**
+     * Initializes the pattern.
+     *
+     * @param p the pattern
+     * @param escapeChar the escape character
+     */
+    public void initPattern(String p, Character escapeChar) {
         if (compareMode.getName().equals(CompareMode.OFF) && !ignoreCase) {
             fastCompare = true;
         }
@@ -511,6 +564,14 @@ public class CompareLike extends Condition {
     }
 
     @Override
+    public Expression getNotIfPossible(SessionLocal session) {
+        if (whenOperand) {
+            return null;
+        }
+        return new CompareLike(compareMode, defaultEscape, left, !not, false, right, escape, likeType);
+    }
+
+    @Override
     public void mapColumns(ColumnResolver resolver, int level, int state) {
         left.mapColumns(resolver, level, state);
         right.mapColumns(resolver, level, state);
@@ -529,7 +590,7 @@ public class CompareLike extends Condition {
     }
 
     @Override
-    public void updateAggregate(Session session, int stage) {
+    public void updateAggregate(SessionLocal session, int stage) {
         left.updateAggregate(session, stage);
         right.updateAggregate(session, stage);
         if (escape != null) {

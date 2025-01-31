@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,12 +7,18 @@ package org.h2.table;
 
 import org.h2.result.SortOrder;
 import org.h2.util.HasSQL;
+import org.h2.util.ParserUtil;
 
 /**
  * This represents a column item of an index. This is required because some
  * indexes support descending sorted columns.
  */
 public class IndexColumn {
+
+    /**
+     * Do not append ordering.
+     */
+    public static final int SQL_NO_ORDER = 0x8000_0000;
 
     /**
      * The column name.
@@ -42,8 +48,28 @@ public class IndexColumn {
      * @return the specified string builder
      */
     public static StringBuilder writeColumns(StringBuilder builder, IndexColumn[] columns, int sqlFlags) {
-        for (int i = 0, l = columns.length; i < l; i++) {
-            if (i > 0) {
+        return writeColumns(builder, columns, 0, columns.length, sqlFlags);
+    }
+
+    /**
+     * Appends the specified columns to the specified builder.
+     *
+     * @param builder
+     *            string builder
+     * @param startOffset
+     *            start offset, inclusive
+     * @param endOffset
+     *            end offset, exclusive
+     * @param columns
+     *            index columns
+     * @param sqlFlags
+     *            formatting flags
+     * @return the specified string builder
+     */
+    public static StringBuilder writeColumns(StringBuilder builder, IndexColumn[] columns, int startOffset,
+            int endOffset, int sqlFlags) {
+        for (int i = startOffset; i < endOffset; i++) {
+            if (i > startOffset) {
                 builder.append(", ");
             }
             columns[i].getSQL(builder,  sqlFlags);
@@ -88,6 +114,19 @@ public class IndexColumn {
     }
 
     /**
+     * Creates a new instance with the specified name.
+     *
+     * @param columnName
+     *            the column name
+     * @param sortType
+     *            the sort type
+     */
+    public IndexColumn(String columnName, int sortType) {
+        this.columnName = columnName;
+        this.sortType = sortType;
+    }
+
+    /**
      * Creates a new instance with the specified column.
      *
      * @param column
@@ -108,7 +147,14 @@ public class IndexColumn {
      * @return the specified string builder
      */
     public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        SortOrder.typeToString(column.getSQL(builder, sqlFlags), sortType);
+        if (column != null) {
+            column.getSQL(builder, sqlFlags);
+        } else {
+            ParserUtil.quoteIdentifier(builder, columnName, sqlFlags);
+        }
+        if ((sqlFlags & SQL_NO_ORDER) == 0) {
+            SortOrder.typeToString(builder, sortType);
+        }
         return builder;
     }
 

@@ -1,28 +1,48 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
 
 CREATE TABLE TEST(ID INT PRIMARY KEY, N VARCHAR, J JSON) AS VALUES
-    (1, 'Ten', '10' FORMAT JSON),
-    (2, 'Null', NULL),
-    (3, 'False', 'false' FORMAT JSON);
+    (1, '10', JSON '10'),
+    (2, NULL, NULL),
+    (3, 'null', JSON 'null'),
+    (4, 'false', JSON 'false'),
+    (5, 'false', JSON 'false');
 > ok
 
 SELECT JSON_ARRAYAGG(J NULL ON NULL) FROM TEST;
->> [10,null,false]
+>> [10,null,null,false,false]
+
+SELECT JSON_ARRAYAGG(N NULL ON NULL) FROM TEST;
+>> ["10",null,"null","false","false"]
+
+SELECT JSON_ARRAYAGG(N FORMAT JSON NULL ON NULL) FROM TEST;
+>> [10,null,null,false,false]
 
 SELECT JSON_ARRAYAGG(J) FROM TEST;
+>> [10,false,false]
+
+SELECT JSON_ARRAYAGG(N) FROM TEST;
+>> ["10","null","false","false"]
+
+SELECT JSON_ARRAYAGG(N FORMAT JSON) FROM TEST;
+>> [10,false,false]
+
+SELECT JSON_ARRAYAGG(ALL J) FROM TEST;
+>> [10,false,false]
+
+SELECT JSON_ARRAYAGG(DISTINCT J) FROM TEST;
 >> [10,false]
 
 SELECT JSON_ARRAYAGG(J NULL ON NULL) FROM TEST;
->> [10,null,false]
+>> [10,null,null,false,false]
 
 SELECT JSON_ARRAYAGG(J ABSENT ON NULL) FROM TEST;
->> [10,false]
+>> [10,false,false]
 
 SELECT JSON_ARRAYAGG(J ORDER BY ID DESC NULL ON NULL) FROM TEST;
->> [false,null,10]
+>> [false,false,null,null,10]
 
 SELECT JSON_ARRAY(NULL NULL ON NULL);
 >> [null]
@@ -39,17 +59,23 @@ EXPLAIN SELECT JSON_ARRAYAGG(J ABSENT ON NULL) FROM TEST;
 EXPLAIN SELECT JSON_ARRAYAGG(J FORMAT JSON ABSENT ON NULL) FROM TEST;
 >> SELECT JSON_ARRAYAGG("J" FORMAT JSON) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
 
-EXPLAIN SELECT JSON_ARRAYAGG(J FORMAT JSON ORDER BY ID DESC ABSENT ON NULL) FROM TEST;
->> SELECT JSON_ARRAYAGG("J" FORMAT JSON ORDER BY "ID" DESC) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
+EXPLAIN SELECT JSON_ARRAYAGG(DISTINCT J FORMAT JSON ORDER BY ID DESC ABSENT ON NULL) FROM TEST;
+>> SELECT JSON_ARRAYAGG(DISTINCT "J" FORMAT JSON ORDER BY "ID" DESC) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */
 
 DELETE FROM TEST WHERE J IS NOT NULL;
-> update count: 2
+> update count: 4
 
 SELECT JSON_ARRAYAGG(J) FROM TEST;
->> null
+>> []
 
 SELECT JSON_ARRAYAGG(J NULL ON NULL) FROM TEST;
 >> [null]
+
+DELETE FROM TEST;
+> update count: 1
+
+SELECT JSON_ARRAYAGG(J) FROM TEST;
+>> null
 
 DROP TABLE TEST;
 > ok

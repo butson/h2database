@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -29,7 +29,7 @@ public interface DataType<T> extends Comparator<T> {
     /**
      * Perform binary search for the key within the storage
      * @param key to search for
-     * @param storage to search within
+     * @param storage to search within (an array of type T)
      * @param size number of data items in the storage
      * @param initialGuess for key position
      * @return index of the key , if found, - index of the insertion point, if not

@@ -1,9 +1,12 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.CastDataProvider;
@@ -15,9 +18,14 @@ import org.h2.message.DbException;
 public final class ValueSmallint extends Value {
 
     /**
-     * The precision in digits.
+     * The precision in bits.
      */
-    static final int PRECISION = 5;
+    static final int PRECISION = 16;
+
+    /**
+     * The approximate precision in decimal digits.
+     */
+    public static final int DECIMAL_PRECISION = 5;
 
     /**
      * The maximum display size of a SMALLINT.
@@ -68,7 +76,7 @@ public final class ValueSmallint extends Value {
     }
 
     @Override
-    public Value divide(Value v, long divisorPrecision) {
+    public Value divide(Value v, TypeInfo quotientType) {
         ValueSmallint other = (ValueSmallint) v;
         if (other.value == 0) {
             throw DbException.get(ErrorCode.DIVISION_BY_ZERO_1, getTraceSQL());
@@ -104,12 +112,43 @@ public final class ValueSmallint extends Value {
     }
 
     @Override
+    public byte[] getBytes() {
+        short value = this.value;
+        return new byte[] { (byte) (value >> 8), (byte) value };
+    }
+
+    @Override
     public short getShort() {
         return value;
     }
 
     @Override
     public int getInt() {
+        return value;
+    }
+
+    @Override
+    public long getLong() {
+        return value;
+    }
+
+    @Override
+    public BigInteger getBigInteger() {
+        return BigInteger.valueOf(value);
+    }
+
+    @Override
+    public BigDecimal getBigDecimal() {
+        return BigDecimal.valueOf(value);
+    }
+
+    @Override
+    public float getFloat() {
+        return value;
+    }
+
+    @Override
+    public double getDouble() {
         return value;
     }
 
@@ -125,11 +164,6 @@ public final class ValueSmallint extends Value {
 
     @Override
     public int hashCode() {
-        return value;
-    }
-
-    @Override
-    public Object getObject() {
         return value;
     }
 

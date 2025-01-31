@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -15,7 +15,6 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.NonWritableChannelException;
 import java.nio.file.Paths;
-import java.util.concurrent.TimeUnit;
 import org.h2.engine.SysProperties;
 import org.h2.store.fs.FileBaseDefault;
 import org.h2.store.fs.FileUtils;
@@ -27,7 +26,7 @@ import org.h2.util.MemoryUnmapper;
  */
 class FileNioMapped extends FileBaseDefault {
 
-    private static final long GC_TIMEOUT_MS = 10_000;
+    private static final int GC_TIMEOUT_MS = 10_000;
     private final String name;
     private final MapMode mode;
     private FileChannel channel;
@@ -63,11 +62,10 @@ class FileNioMapped extends FileBaseDefault {
         }
         WeakReference<MappedByteBuffer> bufferWeakRef = new WeakReference<>(mapped);
         mapped = null;
-        long start = System.nanoTime();
+        long stopAt = System.nanoTime() + GC_TIMEOUT_MS * 1_000_000L;
         while (bufferWeakRef.get() != null) {
-            if (System.nanoTime() - start > TimeUnit.MILLISECONDS.toNanos(GC_TIMEOUT_MS)) {
-                throw new IOException("Timeout (" + GC_TIMEOUT_MS
-                        + " ms) reached while trying to GC mapped buffer");
+            if (System.nanoTime() - stopAt > 0L) {
+                throw new IOException("Timeout (" + GC_TIMEOUT_MS + " ms) reached while trying to GC mapped buffer");
             }
             System.gc();
             Thread.yield();

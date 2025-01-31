@@ -1,12 +1,14 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.engine;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Properties;
@@ -18,16 +20,21 @@ import org.h2.security.SHA256;
 import org.h2.store.fs.FileUtils;
 import org.h2.store.fs.encrypt.FilePathEncrypt;
 import org.h2.store.fs.rec.FilePathRec;
+import org.h2.util.IOUtils;
 import org.h2.util.NetworkConnectionInfo;
 import org.h2.util.SortedProperties;
 import org.h2.util.StringUtils;
+import org.h2.util.TimeZoneProvider;
 import org.h2.util.Utils;
 
 /**
  * Encapsulates the connection settings, including user name and password.
  */
 public class ConnectionInfo implements Cloneable {
+
     private static final HashSet<String> KNOWN_SETTINGS;
+
+    private static final HashSet<String> IGNORED_BY_PARSER;
 
     private Properties prop = new Properties();
     private String originalURL;
@@ -36,6 +43,8 @@ public class ConnectionInfo implements Cloneable {
     private byte[] filePasswordHash;
     private byte[] fileEncryptionKey;
     private byte[] userPasswordHash;
+
+    private TimeZoneProvider timeZone;
 
     /**
      * The database name
@@ -65,17 +74,32 @@ public class ConnectionInfo implements Cloneable {
      * Create a connection info object.
      *
      * @param u the database URL (must start with jdbc:h2:)
-     * @param info the connection properties
+     * @param info the connection properties or {@code null}
+     * @param user the user name or {@code null}
+     * @param password
+     *            the password as {@code String} or {@code char[]}, or
+     *            {@code null}
      */
-    public ConnectionInfo(String u, Properties info) {
+    public ConnectionInfo(String u, Properties info, String user, Object password) {
         u = remapURL(u);
-        this.originalURL = u;
+        originalURL = url = u;
         if (!u.startsWith(Constants.START_URL)) {
-            throw DbException.getInvalidValueException("url", u);
+            throw getFormatException();
         }
-        this.url = u;
-        readProperties(info);
+        if (info != null) {
+            readProperties(info);
+        }
+        if (user != null) {
+            prop.put("USER", user);
+        }
+        if (password != null) {
+            prop.put("PASSWORD", password);
+        }
         readSettingsFromURL();
+        Object timeZoneName = prop.remove("TIME ZONE");
+        if (timeZoneName != null) {
+            timeZone = TimeZoneProvider.ofId(timeZoneName.toString());
+        }
         setUserName(removeProperty("USER", ""));
         name = url.substring(Constants.START_URL.length());
         parseName();
@@ -93,24 +117,68 @@ public class ConnectionInfo implements Cloneable {
     }
 
     static {
-        String[] connectionTime = { "ACCESS_MODE_DATA", "AUTOCOMMIT", "CIPHER",
-                "CREATE", "CACHE_TYPE", "FILE_LOCK", "IGNORE_UNKNOWN_SETTINGS",
-                "IFEXISTS", "INIT", "FORBID_CREATION", "PASSWORD", "RECOVER", "RECOVER_TEST",
-                "USER", "AUTO_SERVER", "AUTO_SERVER_PORT", "NO_UPGRADE",
-                "AUTO_RECONNECT", "OPEN_NEW", "PAGE_SIZE", "PASSWORD_HASH", "JMX",
-                "SCOPE_GENERATED_KEYS", "AUTHREALM", "AUTHZPWD", "NETWORK_TIMEOUT"};
+        String[] commonSettings = { //
+                "ACCESS_MODE_DATA", "AUTO_RECONNECT", "AUTO_SERVER", "AUTO_SERVER_PORT", //
+                "CACHE_TYPE", //
+                "DB_CLOSE_ON_EXIT", //
+                "FILE_LOCK", //
+                "JMX", //
+                "NETWORK_TIMEOUT", //
+                "OLD_INFORMATION_SCHEMA", "OPEN_NEW", //
+                "PAGE_SIZE", //
+                "RECOVER", //
+        };
+        String[] settings = { //
+                "AUTHREALM", "AUTHZPWD", "AUTOCOMMIT", //
+                "CIPHER", "CREATE", //
+                "FORBID_CREATION", //
+                "IGNORE_UNKNOWN_SETTINGS", "IFEXISTS", "INIT", //
+                "NO_UPGRADE", //
+                "PASSWORD", "PASSWORD_HASH", //
+                "RECOVER_TEST", //
+                "USER" //
+        };
         HashSet<String> set = new HashSet<>(128);
         set.addAll(SetTypes.getTypes());
-        for (String key : connectionTime) {
-            if (!set.add(key)) {
-                DbException.throwInternalError(key);
+        for (String setting : commonSettings) {
+            if (!set.add(setting)) {
+                throw DbException.getInternalError(setting);
+            }
+        }
+        for (String setting : settings) {
+            if (!set.add(setting)) {
+                throw DbException.getInternalError(setting);
             }
         }
         KNOWN_SETTINGS = set;
+        settings = new String[] { //
+                "ASSERT", //
+                "BINARY_COLLATION", //
+                "DB_CLOSE_ON_EXIT", //
+                "PAGE_STORE", //
+                "UUID_COLLATION", //
+        };
+        set = new HashSet<>(32);
+        Collections.addAll(set, commonSettings);
+        Collections.addAll(set, settings);
+        IGNORED_BY_PARSER = set;
     }
 
     private static boolean isKnownSetting(String s) {
         return KNOWN_SETTINGS.contains(s);
+    }
+
+    /**
+     * Returns whether setting with the specified name should be ignored by
+     * parser.
+     *
+     * @param name
+     *            the name of the setting
+     * @return whether setting with the specified name should be ignored by
+     *         parser
+     */
+    public static boolean isIgnoredByParser(String name) {
+        return IGNORED_BY_PARSER.contains(name);
     }
 
     @Override
@@ -146,11 +214,7 @@ public class ConnectionInfo implements Cloneable {
             persistent = true;
         }
         if (persistent && !remote) {
-            if ("/".equals(SysProperties.FILE_SEPARATOR)) {
-                name = name.replace('\\', '/');
-            } else {
-                name = name.replace('/', '\\');
-            }
+            name = IOUtils.nameSeparatorsToNative(name);
         }
     }
 
@@ -166,7 +230,7 @@ public class ConnectionInfo implements Cloneable {
             boolean absolute = FileUtils.isAbsolute(name);
             String n;
             String prefix = null;
-            if (dir.endsWith(SysProperties.FILE_SEPARATOR)) {
+            if (dir.endsWith(File.separator)) {
                 dir = dir.substring(0, dir.length() - 1);
             }
             if (absolute) {
@@ -174,7 +238,7 @@ public class ConnectionInfo implements Cloneable {
             } else {
                 n  = FileUtils.unwrap(name);
                 prefix = name.substring(0, name.length() - n.length());
-                n = dir + SysProperties.FILE_SEPARATOR + n;
+                n = dir + File.separatorChar + n;
             }
             String normalizedName = FileUtils.unwrap(FileUtils.toRealPath(n));
             if (normalizedName.equals(absDir) || !normalizedName.startsWith(absDir)) {
@@ -193,7 +257,7 @@ public class ConnectionInfo implements Cloneable {
                         absDir);
             }
             if (!absolute) {
-                name = prefix + dir + SysProperties.FILE_SEPARATOR + FileUtils.unwrap(name);
+                name = prefix + dir + File.separatorChar + FileUtils.unwrap(name);
             }
         }
     }
@@ -372,7 +436,7 @@ public class ConnectionInfo implements Cloneable {
      */
     String removeProperty(String key, String defaultValue) {
         if (SysProperties.CHECK && !isKnownSetting(key)) {
-            DbException.throwInternalError(key);
+            throw DbException.getInternalError(key);
         }
         Object x = prop.remove(key);
         return x == null ? defaultValue : x.toString();
@@ -388,31 +452,17 @@ public class ConnectionInfo implements Cloneable {
             return name;
         }
         if (nameNormalized == null) {
-            if (!SysProperties.IMPLICIT_RELATIVE_PATH) {
-                if (!FileUtils.isAbsolute(name)) {
-                    if (!name.contains("./") &&
-                            !name.contains(".\\") &&
-                            !name.contains(":/") &&
-                            !name.contains(":\\")) {
-                        // the name could start with "./", or
-                        // it could start with a prefix such as "nioMapped:./"
-                        // for Windows, the path "\test" is not considered
-                        // absolute as the drive letter is missing,
-                        // but we consider it absolute
-                        throw DbException.get(
-                                ErrorCode.URL_RELATIVE_TO_CWD,
-                                originalURL);
-                    }
-                }
+            if (!FileUtils.isAbsolute(name) && !name.contains("./") && !name.contains(".\\") && !name.contains(":/")
+                    && !name.contains(":\\")) {
+                // the name could start with "./", or
+                // it could start with a prefix such as "nioMapped:./"
+                // for Windows, the path "\test" is not considered
+                // absolute as the drive letter is missing,
+                // but we consider it absolute
+                throw DbException.get(ErrorCode.URL_RELATIVE_TO_CWD, originalURL);
             }
-            String suffix = Constants.SUFFIX_PAGE_FILE;
-            String n;
-            if (FileUtils.exists(name + suffix)) {
-                n = FileUtils.toRealPath(name + suffix);
-            } else {
-                suffix = Constants.SUFFIX_MV_FILE;
-                n = FileUtils.toRealPath(name + suffix);
-            }
+            String suffix = Constants.SUFFIX_MV_FILE;
+            String n = FileUtils.toRealPath(name + suffix);
             String fileName = FileUtils.getName(n);
             if (fileName.length() < suffix.length() + 1) {
                 throw DbException.get(ErrorCode.INVALID_DATABASE_NAME_1, name);
@@ -485,7 +535,7 @@ public class ConnectionInfo implements Cloneable {
      */
     int getProperty(String key, int defaultValue) {
         if (SysProperties.CHECK && !isKnownSetting(key)) {
-            DbException.throwInternalError(key);
+            throw DbException.getInternalError(key);
         }
         String s = getProperty(key);
         return s == null ? defaultValue : Integer.parseInt(s);
@@ -500,7 +550,7 @@ public class ConnectionInfo implements Cloneable {
      */
     public String getProperty(String key, String defaultValue) {
         if (SysProperties.CHECK && !isKnownSetting(key)) {
-            DbException.throwInternalError(key);
+            throw DbException.getInternalError(key);
         }
         String s = getProperty(key);
         return s == null ? defaultValue : s;
@@ -618,13 +668,21 @@ public class ConnectionInfo implements Cloneable {
     }
 
     /**
+     * Returns the time zone.
+     *
+     * @return the time zone
+     */
+    public TimeZoneProvider getTimeZone() {
+        return timeZone;
+    }
+
+    /**
      * Generate a URL format exception.
      *
      * @return the exception
      */
     DbException getFormatException() {
-        String format = Constants.URL_FORMAT;
-        return DbException.get(ErrorCode.URL_FORMAT_ERROR_2, format, url);
+        return DbException.get(ErrorCode.URL_FORMAT_ERROR_2, Constants.URL_FORMAT, url);
     }
 
     /**

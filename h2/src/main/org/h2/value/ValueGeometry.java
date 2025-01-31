@@ -1,22 +1,21 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
 
+import static org.h2.util.Bits.INT_VH_BE;
 import static org.h2.util.geometry.EWKBUtils.EWKB_SRID;
-
-import java.util.Arrays;
 
 import org.h2.api.ErrorCode;
 import org.h2.message.DbException;
-import org.h2.util.Bits;
+import org.h2.util.MathUtils;
 import org.h2.util.StringUtils;
 import org.h2.util.geometry.EWKBUtils;
 import org.h2.util.geometry.EWKTUtils;
+import org.h2.util.geometry.EWKTUtils.EWKTTarget;
 import org.h2.util.geometry.GeometryUtils;
-import org.h2.util.geometry.GeometryUtils.EnvelopeAndDimensionSystemTarget;
 import org.h2.util.geometry.GeometryUtils.EnvelopeTarget;
 import org.h2.util.geometry.JTSUtils;
 import org.locationtech.jts.geom.Geometry;
@@ -67,8 +66,8 @@ public final class ValueGeometry extends ValueBytesBase {
         }
         this.value = bytes;
         this.envelope = envelope;
-        int t = Bits.readInt(bytes, 1);
-        srid = (t & EWKB_SRID) != 0 ? Bits.readInt(bytes, 5) : 0;
+        int t = (int) INT_VH_BE.get(bytes, 1);
+        srid = (t & EWKB_SRID) != 0 ? (int) INT_VH_BE.get(bytes, 5) : 0;
         typeAndDimensionSystem = (t & 0xffff) % 1_000 + EWKBUtils.type2dimensionSystem(t) * 1_000;
     }
 
@@ -81,11 +80,8 @@ public final class ValueGeometry extends ValueBytesBase {
      */
     public static ValueGeometry getFromGeometry(Object o) {
         try {
-            EnvelopeAndDimensionSystemTarget target = new EnvelopeAndDimensionSystemTarget();
             Geometry g = (Geometry) o;
-            JTSUtils.parseGeometry(g, target);
-            return (ValueGeometry) Value.cache(new ValueGeometry( //
-                    JTSUtils.geometry2ewkb(g, target.getDimensionSystem()), target.getEnvelope()));
+            return (ValueGeometry) Value.cache(new ValueGeometry(JTSUtils.geometry2ewkb(g), UNKNOWN_ENVELOPE));
         } catch (RuntimeException ex) {
             throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, String.valueOf(o));
         }
@@ -99,25 +95,10 @@ public final class ValueGeometry extends ValueBytesBase {
      */
     public static ValueGeometry get(String s) {
         try {
-            EnvelopeAndDimensionSystemTarget target = new EnvelopeAndDimensionSystemTarget();
-            EWKTUtils.parseEWKT(s, target);
-            return (ValueGeometry) Value.cache(new ValueGeometry( //
-                    EWKTUtils.ewkt2ewkb(s, target.getDimensionSystem()), target.getEnvelope()));
+            return (ValueGeometry) Value.cache(new ValueGeometry(EWKTUtils.ewkt2ewkb(s), UNKNOWN_ENVELOPE));
         } catch (RuntimeException ex) {
             throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, s);
         }
-    }
-
-    /**
-     * Get or create a geometry value for the given geometry.
-     *
-     * @param s the WKT representation of the geometry
-     * @param srid the srid of the object
-     * @return the value
-     */
-    public static ValueGeometry get(String s, int srid) {
-        // This method is not used in H2, but preserved for H2GIS
-        return get(srid == 0 ? s : "SRID=" + srid + ';' + s);
     }
 
     /**
@@ -138,10 +119,7 @@ public final class ValueGeometry extends ValueBytesBase {
      */
     public static ValueGeometry getFromEWKB(byte[] bytes) {
         try {
-            EnvelopeAndDimensionSystemTarget target = new EnvelopeAndDimensionSystemTarget();
-            EWKBUtils.parseEWKB(bytes, target);
-            return (ValueGeometry) Value.cache(new ValueGeometry( //
-                    EWKBUtils.ewkb2ewkb(bytes, target.getDimensionSystem()), target.getEnvelope()));
+            return (ValueGeometry) Value.cache(new ValueGeometry(EWKBUtils.ewkb2ewkb(bytes), UNKNOWN_ENVELOPE));
         } catch (RuntimeException ex) {
             throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, StringUtils.convertBytesToHex(bytes));
         }
@@ -260,10 +238,14 @@ public final class ValueGeometry extends ValueBytesBase {
 
     @Override
     public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        if ((sqlFlags & NO_CASTS) == 0) {
-            return super.getSQL(builder.append("CAST("), DEFAULT_SQL_FLAGS).append(" AS GEOMETRY)");
+        builder.append("GEOMETRY ");
+        if ((sqlFlags & ADD_PLAN_INFORMATION) != 0) {
+            EWKBUtils.parseEWKB(value, new EWKTTarget(builder.append('\''), getDimensionSystem()));
+            builder.append('\'');
+        } else {
+            super.getSQL(builder, DEFAULT_SQL_FLAGS);
         }
-        return super.getSQL(builder, DEFAULT_SQL_FLAGS);
+        return builder;
     }
 
     @Override
@@ -272,29 +254,8 @@ public final class ValueGeometry extends ValueBytesBase {
     }
 
     @Override
-    public int hashCode() {
-        int h = hash;
-        if (h == 0) {
-            h = getClass().hashCode() ^ Arrays.hashCode(value);
-            if (h == 0) {
-                h = 1_456_791_899;
-            }
-            hash = h;
-        }
-        return h;
-    }
-
-    @Override
-    public Object getObject() {
-        if (DataType.GEOMETRY_CLASS != null) {
-            return getGeometry();
-        }
-        return getString();
-    }
-
-    @Override
     public int getMemory() {
-        return value.length * 20 + 24;
+        return MathUtils.convertLongToInt(value.length * 20L + 24);
     }
 
 }

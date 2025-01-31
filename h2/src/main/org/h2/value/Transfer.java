@@ -1,9 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
+
+import static org.h2.util.Bits.LONG_VH_BE;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -14,29 +16,36 @@ import java.io.Reader;
 import java.math.BigDecimal;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
+
 import org.h2.api.ErrorCode;
 import org.h2.api.IntervalQualifier;
 import org.h2.engine.Constants;
-import org.h2.engine.SessionInterface;
+import org.h2.engine.Session;
 import org.h2.message.DbException;
-import org.h2.result.ResultInterface;
-import org.h2.result.SimpleResult;
 import org.h2.security.SHA256;
 import org.h2.store.Data;
 import org.h2.store.DataReader;
-import org.h2.util.Bits;
 import org.h2.util.DateTimeUtils;
 import org.h2.util.IOUtils;
 import org.h2.util.MathUtils;
 import org.h2.util.NetUtils;
 import org.h2.util.StringUtils;
 import org.h2.util.Utils;
+import org.h2.value.lob.LobData;
+import org.h2.value.lob.LobDataDatabase;
+import org.h2.value.lob.LobDataFetchOnDemand;
 
 /**
  * The transfer class is used to send and receive Value objects.
  * It is used on both the client side, and on the server side.
  */
-public class Transfer {
+public final class Transfer {
 
     private static final int BUFFER_SIZE = 64 * 1024;
     private static final int LOB_MAGIC = 0x1234;
@@ -60,7 +69,6 @@ public class Transfer {
     private static final int BLOB = 15;
     private static final int CLOB = 16;
     private static final int ARRAY = 17;
-    private static final int RESULT_SET = 18;
     private static final int JAVA_OBJECT = 19;
     private static final int UUID = 20;
     private static final int CHAR = 21;
@@ -75,11 +83,12 @@ public class Transfer {
     // 1.4.200
     private static final int JSON = 28;
     private static final int TIME_TZ = 29;
-    // 201
+    // 2.0.202
     private static final int BINARY = 30;
+    private static final int DECFLOAT = 31;
 
     private static final int[] VALUE_TO_TI = new int[Value.TYPE_COUNT + 1];
-    private static final int[] TI_TO_VALUE = new int[44];
+    private static final int[] TI_TO_VALUE = new int[45];
 
     static {
         addType(-1, Value.UNKNOWN);
@@ -101,7 +110,6 @@ public class Transfer {
         addType(BLOB, Value.BLOB);
         addType(CLOB, Value.CLOB);
         addType(ARRAY, Value.ARRAY);
-        addType(RESULT_SET, Value.RESULT_SET);
         addType(JAVA_OBJECT, Value.JAVA_OBJECT);
         addType(UUID, Value.UUID);
         addType(CHAR, Value.CHAR);
@@ -125,6 +133,7 @@ public class Transfer {
         addType(40, Value.JSON);
         addType(41, Value.TIME_TZ);
         addType(42, Value.BINARY);
+        addType(43, Value.DECFLOAT);
     }
 
     private static void addType(int typeInformationType, int valueType) {
@@ -132,10 +141,12 @@ public class Transfer {
         TI_TO_VALUE[typeInformationType + 1] = valueType;
     }
 
+    private final ReentrantLock lock = new ReentrantLock();
+
     private Socket socket;
     private DataInputStream in;
     private DataOutputStream out;
-    private SessionInterface session;
+    private Session session;
     private boolean ssl;
     private int version;
     private byte[] lobMacSalt;
@@ -146,28 +157,60 @@ public class Transfer {
      * @param session the session
      * @param s the socket
      */
-    public Transfer(SessionInterface session, Socket s) {
+    public Transfer(Session session, Socket s) {
         this.session = session;
         this.socket = s;
     }
 
     /**
+     * Locks this object with a reentrant lock.
+     *
+     * <pre>
+     * lock();
+     * try {
+     *     ...
+     * } finally {
+     *     unlock();
+     * }
+     * </pre>
+     */
+    private void lock() {
+        lock.lock();
+    }
+
+    /**
+     * Unlocks this object.
+     *
+     * @see #lock()
+     */
+    private void unlock() {
+        lock.unlock();
+    }
+
+    /**
      * Initialize the transfer object. This method will try to open an input and
      * output stream.
+     * @throws IOException on failure
      */
-    public synchronized void init() throws IOException {
-        if (socket != null) {
-            in = new DataInputStream(
-                    new BufferedInputStream(
-                            socket.getInputStream(), Transfer.BUFFER_SIZE));
-            out = new DataOutputStream(
-                    new BufferedOutputStream(
-                            socket.getOutputStream(), Transfer.BUFFER_SIZE));
+    public void init() throws IOException {
+        lock();
+        try {
+            if (socket != null) {
+                in = new DataInputStream(
+                        new BufferedInputStream(
+                                socket.getInputStream(), Transfer.BUFFER_SIZE));
+                out = new DataOutputStream(
+                        new BufferedOutputStream(
+                                socket.getOutputStream(), Transfer.BUFFER_SIZE));
+            }
+        } finally {
+            unlock();
         }
     }
 
     /**
      * Write pending changes.
+     * @throws IOException on failure
      */
     public void flush() throws IOException {
         out.flush();
@@ -178,6 +221,7 @@ public class Transfer {
      *
      * @param x the value
      * @return itself
+     * @throws IOException on failure
      */
     public Transfer writeBoolean(boolean x) throws IOException {
         out.writeByte((byte) (x ? 1 : 0));
@@ -188,6 +232,7 @@ public class Transfer {
      * Read a boolean.
      *
      * @return the value
+     * @throws IOException on failure
      */
     public boolean readBoolean() throws IOException {
         return in.readByte() != 0;
@@ -198,8 +243,9 @@ public class Transfer {
      *
      * @param x the value
      * @return itself
+     * @throws IOException on failure
      */
-    private Transfer writeByte(byte x) throws IOException {
+    public Transfer writeByte(byte x) throws IOException {
         out.writeByte(x);
         return this;
     }
@@ -208,9 +254,32 @@ public class Transfer {
      * Read a byte.
      *
      * @return the value
+     * @throws IOException on failure
      */
-    private byte readByte() throws IOException {
+    public byte readByte() throws IOException {
         return in.readByte();
+    }
+
+    /**
+     * Write a short.
+     *
+     * @param x the value
+     * @return itself
+     * @throws IOException on failure
+     */
+    private Transfer writeShort(short x) throws IOException {
+        out.writeShort(x);
+        return this;
+    }
+
+    /**
+     * Read a short.
+     *
+     * @return the value
+     * @throws IOException on failure
+     */
+    private short readShort() throws IOException {
+        return in.readShort();
     }
 
     /**
@@ -218,6 +287,7 @@ public class Transfer {
      *
      * @param x the value
      * @return itself
+     * @throws IOException on failure
      */
     public Transfer writeInt(int x) throws IOException {
         out.writeInt(x);
@@ -228,6 +298,7 @@ public class Transfer {
      * Read an int.
      *
      * @return the value
+     * @throws IOException on failure
      */
     public int readInt() throws IOException {
         return in.readInt();
@@ -238,6 +309,7 @@ public class Transfer {
      *
      * @param x the value
      * @return itself
+     * @throws IOException on failure
      */
     public Transfer writeLong(long x) throws IOException {
         out.writeLong(x);
@@ -248,6 +320,7 @@ public class Transfer {
      * Read a long.
      *
      * @return the value
+     * @throws IOException on failure
      */
     public long readLong() throws IOException {
         return in.readLong();
@@ -258,6 +331,7 @@ public class Transfer {
      *
      * @param i the value
      * @return itself
+     * @throws IOException on failure
      */
     private Transfer writeDouble(double i) throws IOException {
         out.writeDouble(i);
@@ -279,6 +353,7 @@ public class Transfer {
      * Read a double.
      *
      * @return the value
+     * @throws IOException on failure
      */
     private double readDouble() throws IOException {
         return in.readDouble();
@@ -288,6 +363,7 @@ public class Transfer {
      * Read a float.
      *
      * @return the value
+     * @throws IOException on failure
      */
     private float readFloat() throws IOException {
         return in.readFloat();
@@ -298,6 +374,7 @@ public class Transfer {
      *
      * @param s the value
      * @return itself
+     * @throws IOException on failure
      */
     public Transfer writeString(String s) throws IOException {
         if (s == null) {
@@ -313,6 +390,7 @@ public class Transfer {
      * Read a string.
      *
      * @return the value
+     * @throws IOException on failure
      */
     public String readString() throws IOException {
         int len = in.readInt();
@@ -333,6 +411,7 @@ public class Transfer {
      *
      * @param data the value
      * @return itself
+     * @throws IOException on failure
      */
     public Transfer writeBytes(byte[] data) throws IOException {
         if (data == null) {
@@ -351,6 +430,7 @@ public class Transfer {
      * @param off the offset
      * @param len the length
      * @return itself
+     * @throws IOException on failure
      */
     public Transfer writeBytes(byte[] buff, int off, int len) throws IOException {
         out.write(buff, off, len);
@@ -361,6 +441,7 @@ public class Transfer {
      * Read a byte array.
      *
      * @return the value
+     * @throws IOException on failure
      */
     public byte[] readBytes() throws IOException {
         int len = readInt();
@@ -378,6 +459,7 @@ public class Transfer {
      * @param buff the target buffer
      * @param off the offset
      * @param len the number of bytes to read
+     * @throws IOException on failure
      */
     public void readBytes(byte[] buff, int off, int len) throws IOException {
         in.readFully(buff, off, len);
@@ -386,20 +468,23 @@ public class Transfer {
     /**
      * Close the transfer object and the socket.
      */
-    public synchronized void close() {
-        if (socket != null) {
-            try {
-                if (out != null) {
-                    out.flush();
-                }
-                if (socket != null) {
+    public void close() {
+        lock();
+        try {
+            if (socket != null) {
+                try {
+                    if (out != null) {
+                        out.flush();
+                    }
                     socket.close();
+                } catch (IOException e) {
+                    DbException.traceThrowable(e);
+                } finally {
+                    socket = null;
                 }
-            } catch (IOException e) {
-                DbException.traceThrowable(e);
-            } finally {
-                socket = null;
             }
+        } finally {
+            unlock();
         }
     }
 
@@ -408,36 +493,316 @@ public class Transfer {
      *
      * @param type data type information
      * @return itself
+     * @throws IOException on failure
      */
     public Transfer writeTypeInfo(TypeInfo type) throws IOException {
-        int valueType = type.getValueType();
-        writeInt(VALUE_TO_TI[valueType + 1]).writeLong(type.getPrecision()).writeInt(type.getScale());
-        if (valueType == Value.ARRAY && version >= Constants.TCP_PROTOCOL_VERSION_20) {
-            writeTypeInfo(((ExtTypeInfoArray) type.getExtTypeInfo()).getComponentType());
+        if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+            writeTypeInfo20(type);
+        } else {
+            writeTypeInfo19(type);
         }
         return this;
+    }
+
+    private void writeTypeInfo20(TypeInfo type) throws IOException {
+        int valueType = type.getValueType();
+        writeInt(VALUE_TO_TI[valueType + 1]);
+        switch (valueType) {
+        case Value.UNKNOWN:
+        case Value.NULL:
+        case Value.BOOLEAN:
+        case Value.TINYINT:
+        case Value.SMALLINT:
+        case Value.INTEGER:
+        case Value.BIGINT:
+        case Value.DATE:
+        case Value.UUID:
+            break;
+        case Value.CHAR:
+        case Value.VARCHAR:
+        case Value.VARCHAR_IGNORECASE:
+        case Value.BINARY:
+        case Value.VARBINARY:
+        case Value.DECFLOAT:
+        case Value.JAVA_OBJECT:
+        case Value.JSON:
+            writeInt((int) type.getDeclaredPrecision());
+            break;
+        case Value.CLOB:
+        case Value.BLOB:
+            writeLong(type.getDeclaredPrecision());
+            break;
+        case Value.NUMERIC:
+            writeInt((int) type.getDeclaredPrecision());
+            writeInt(type.getDeclaredScale());
+            writeBoolean(type.getExtTypeInfo() != null);
+            break;
+        case Value.REAL:
+        case Value.DOUBLE:
+        case Value.INTERVAL_YEAR:
+        case Value.INTERVAL_MONTH:
+        case Value.INTERVAL_DAY:
+        case Value.INTERVAL_HOUR:
+        case Value.INTERVAL_MINUTE:
+        case Value.INTERVAL_YEAR_TO_MONTH:
+        case Value.INTERVAL_DAY_TO_HOUR:
+        case Value.INTERVAL_DAY_TO_MINUTE:
+        case Value.INTERVAL_HOUR_TO_MINUTE:
+            writeBytePrecisionWithDefault(type.getDeclaredPrecision());
+            break;
+        case Value.TIME:
+        case Value.TIME_TZ:
+        case Value.TIMESTAMP:
+        case Value.TIMESTAMP_TZ:
+            writeByteScaleWithDefault(type.getDeclaredScale());
+            break;
+        case Value.INTERVAL_SECOND:
+        case Value.INTERVAL_DAY_TO_SECOND:
+        case Value.INTERVAL_HOUR_TO_SECOND:
+        case Value.INTERVAL_MINUTE_TO_SECOND:
+            writeBytePrecisionWithDefault(type.getDeclaredPrecision());
+            writeByteScaleWithDefault(type.getDeclaredScale());
+            break;
+        case Value.ENUM:
+            writeTypeInfoEnum(type);
+            break;
+        case Value.GEOMETRY:
+            writeTypeInfoGeometry(type);
+            break;
+        case Value.ARRAY:
+            writeInt((int) type.getDeclaredPrecision());
+            writeTypeInfo((TypeInfo) type.getExtTypeInfo());
+            break;
+        case Value.ROW:
+            writeTypeInfoRow(type);
+            break;
+        default:
+            throw DbException.getUnsupportedException("value type " + valueType);
+        }
+    }
+
+    private void writeBytePrecisionWithDefault(long precision) throws IOException {
+        writeByte(precision >= 0 ? (byte) precision : -1);
+    }
+
+    private void writeByteScaleWithDefault(int scale) throws IOException {
+        writeByte(scale >= 0 ? (byte) scale : -1);
+    }
+
+    private void writeTypeInfoEnum(TypeInfo type) throws IOException {
+        ExtTypeInfoEnum ext = (ExtTypeInfoEnum) type.getExtTypeInfo();
+        if (ext != null) {
+            int c = ext.getCount();
+            writeInt(c);
+            for (int i = 0; i < c; i++) {
+                writeString(ext.getEnumerator(i));
+            }
+        } else {
+            writeInt(0);
+        }
+    }
+
+    private void writeTypeInfoGeometry(TypeInfo type) throws IOException {
+        ExtTypeInfoGeometry ext = (ExtTypeInfoGeometry) type.getExtTypeInfo();
+        if (ext == null) {
+            writeByte((byte) 0);
+        } else {
+            int t = ext.getType();
+            Integer srid = ext.getSrid();
+            if (t == 0) {
+                if (srid == null) {
+                    writeByte((byte) 0);
+                } else {
+                    writeByte((byte) 2);
+                    writeInt(srid);
+                }
+            } else {
+                if (srid == null) {
+                    writeByte((byte) 1);
+                    writeShort((short) t);
+                } else {
+                    writeByte((byte) 3);
+                    writeShort((short) t);
+                    writeInt(srid);
+                }
+            }
+        }
+    }
+
+    private void writeTypeInfoRow(TypeInfo type) throws IOException {
+        Set<Map.Entry<String, TypeInfo>> fields = ((ExtTypeInfoRow) type.getExtTypeInfo()).getFields();
+        writeInt(fields.size());
+        for (Map.Entry<String, TypeInfo> field : fields) {
+            writeString(field.getKey()).writeTypeInfo(field.getValue());
+        }
+    }
+
+    private void writeTypeInfo19(TypeInfo type) throws IOException {
+        int valueType = type.getValueType();
+        switch (valueType) {
+        case Value.BINARY:
+            valueType = Value.VARBINARY;
+            break;
+        case Value.DECFLOAT:
+            valueType = Value.NUMERIC;
+            break;
+        }
+        writeInt(VALUE_TO_TI[valueType + 1]).writeLong(type.getPrecision()).writeInt(type.getScale());
     }
 
     /**
      * Read a type information.
      *
      * @return the type information
+     * @throws IOException on failure
      */
     public TypeInfo readTypeInfo() throws IOException {
+        if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+            return readTypeInfo20();
+        } else {
+            return readTypeInfo19();
+        }
+    }
+
+    private TypeInfo readTypeInfo20() throws IOException {
         int valueType = TI_TO_VALUE[readInt() + 1];
-        long precision = readLong();
-        int scale = readInt();
+        long precision = -1L;
+        int scale = -1;
         ExtTypeInfo ext = null;
-        if (valueType == Value.ARRAY && version >= Constants.TCP_PROTOCOL_VERSION_20) {
-            ext = new ExtTypeInfoArray(readTypeInfo());
+        switch (valueType) {
+        case Value.UNKNOWN:
+        case Value.NULL:
+        case Value.BOOLEAN:
+        case Value.TINYINT:
+        case Value.SMALLINT:
+        case Value.INTEGER:
+        case Value.BIGINT:
+        case Value.DATE:
+        case Value.UUID:
+            break;
+        case Value.CHAR:
+        case Value.VARCHAR:
+        case Value.VARCHAR_IGNORECASE:
+        case Value.BINARY:
+        case Value.VARBINARY:
+        case Value.DECFLOAT:
+        case Value.JAVA_OBJECT:
+        case Value.JSON:
+            precision = readInt();
+            break;
+        case Value.CLOB:
+        case Value.BLOB:
+            precision = readLong();
+            break;
+        case Value.NUMERIC:
+            precision = readInt();
+            scale = readInt();
+            if (readBoolean()) {
+                ext = ExtTypeInfoNumeric.DECIMAL;
+            }
+            break;
+        case Value.REAL:
+        case Value.DOUBLE:
+        case Value.INTERVAL_YEAR:
+        case Value.INTERVAL_MONTH:
+        case Value.INTERVAL_DAY:
+        case Value.INTERVAL_HOUR:
+        case Value.INTERVAL_MINUTE:
+        case Value.INTERVAL_YEAR_TO_MONTH:
+        case Value.INTERVAL_DAY_TO_HOUR:
+        case Value.INTERVAL_DAY_TO_MINUTE:
+        case Value.INTERVAL_HOUR_TO_MINUTE:
+            precision = readByte();
+            break;
+        case Value.TIME:
+        case Value.TIME_TZ:
+        case Value.TIMESTAMP:
+        case Value.TIMESTAMP_TZ:
+            scale = readByte();
+            break;
+        case Value.INTERVAL_SECOND:
+        case Value.INTERVAL_DAY_TO_SECOND:
+        case Value.INTERVAL_HOUR_TO_SECOND:
+        case Value.INTERVAL_MINUTE_TO_SECOND:
+            precision = readByte();
+            scale = readByte();
+            break;
+        case Value.ENUM:
+            ext = readTypeInfoEnum();
+            break;
+        case Value.GEOMETRY:
+            ext = readTypeInfoGeometry();
+            break;
+        case Value.ARRAY:
+            precision = readInt();
+            ext = readTypeInfo();
+            break;
+        case Value.ROW:
+            ext = readTypeInfoRow();
+            break;
+        default:
+            throw DbException.getUnsupportedException("value type " + valueType);
         }
         return TypeInfo.getTypeInfo(valueType, precision, scale, ext);
+    }
+
+    private ExtTypeInfo readTypeInfoEnum() throws IOException {
+        ExtTypeInfo ext;
+        int c = readInt();
+        if (c > 0) {
+            String[] enumerators = new String[c];
+            for (int i = 0; i < c; i++) {
+                enumerators[i] = readString();
+            }
+            ext = new ExtTypeInfoEnum(enumerators);
+        } else {
+            ext = null;
+        }
+        return ext;
+    }
+
+    private ExtTypeInfo readTypeInfoGeometry() throws IOException {
+        ExtTypeInfo ext;
+        int e = readByte();
+        switch (e) {
+        case 0:
+            ext = null;
+            break;
+        case 1:
+            ext = new ExtTypeInfoGeometry(readShort(), null);
+            break;
+        case 2:
+            ext = new ExtTypeInfoGeometry(0, readInt());
+            break;
+        case 3:
+            ext = new ExtTypeInfoGeometry(readShort(), readInt());
+            break;
+        default:
+            throw DbException.getUnsupportedException("GEOMETRY type encoding " + e);
+        }
+        return ext;
+    }
+
+    private ExtTypeInfo readTypeInfoRow() throws IOException {
+        LinkedHashMap<String, TypeInfo> fields = new LinkedHashMap<>();
+        for (int i = 0, l = readInt(); i < l; i++) {
+            String name = readString();
+            if (fields.putIfAbsent(name, readTypeInfo()) != null) {
+                throw DbException.get(ErrorCode.DUPLICATE_COLUMN_NAME_1, name);
+            }
+        }
+        return new ExtTypeInfoRow(fields);
+    }
+
+    private TypeInfo readTypeInfo19() throws IOException {
+        return TypeInfo.getTypeInfo(TI_TO_VALUE[readInt() + 1], readLong(), readInt(), null);
     }
 
     /**
      * Write a value.
      *
      * @param v the value
+     * @throws IOException on failure
      */
     public void writeValue(Value v) throws IOException {
         int type = v.getValueType();
@@ -445,12 +810,15 @@ public class Transfer {
         case Value.NULL:
             writeInt(NULL);
             break;
+        case Value.BINARY:
+            if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+                writeInt(BINARY);
+                writeBytes(v.getBytesNoCopy());
+                break;
+            }
+            //$FALL-THROUGH$
         case Value.VARBINARY:
             writeInt(VARBINARY);
-            writeBytes(v.getBytesNoCopy());
-            break;
-        case Value.BINARY:
-            writeInt(BINARY);
             writeBytes(v.getBytesNoCopy());
             break;
         case Value.JAVA_OBJECT:
@@ -518,6 +886,13 @@ public class Transfer {
                     ? timeZoneOffset : timeZoneOffset / 60);
             break;
         }
+        case Value.DECFLOAT:
+            if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+                writeInt(DECFLOAT);
+                writeString(v.getString());
+                break;
+            }
+        //$FALL-THROUGH$
         case Value.NUMERIC:
             writeInt(NUMERIC);
             writeString(v.getString());
@@ -540,7 +915,11 @@ public class Transfer {
             break;
         case Value.SMALLINT:
             writeInt(SMALLINT);
-            writeInt(v.getShort());
+            if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+                writeShort(v.getShort());
+            } else {
+                writeInt(v.getShort());
+            }
             break;
         case Value.VARCHAR:
             writeInt(VARCHAR);
@@ -556,23 +935,24 @@ public class Transfer {
             break;
         case Value.BLOB: {
             writeInt(BLOB);
-            ValueLob lob = (ValueLob) v;
-            if (lob instanceof ValueLobDatabase) {
-                ValueLobDatabase lobDb = (ValueLobDatabase) lob;
+            ValueBlob lob = (ValueBlob) v;
+            LobData lobData = lob.getLobData();
+            long length = lob.octetLength();
+            if (lobData instanceof LobDataDatabase) {
+                LobDataDatabase lobDataDatabase = (LobDataDatabase) lobData;
                 writeLong(-1);
-                writeInt(lobDb.getTableId());
-                writeLong(lobDb.getLobId());
-                writeBytes(calculateLobMac(lobDb.getLobId()));
-                writeLong(lob.getType().getPrecision());
+                writeInt(lobDataDatabase.getTableId());
+                writeLong(lobDataDatabase.getLobId());
+                writeBytes(calculateLobMac(lobDataDatabase.getLobId()));
+                writeLong(length);
                 break;
             }
-            long length = v.getType().getPrecision();
             if (length < 0) {
                 throw DbException.get(
                         ErrorCode.CONNECTION_BROKEN_1, "length=" + length);
             }
             writeLong(length);
-            long written = IOUtils.copyAndCloseInput(v.getInputStream(), out);
+            long written = IOUtils.copyAndCloseInput(lob.getInputStream(), out);
             if (written != length) {
                 throw DbException.get(
                         ErrorCode.CONNECTION_BROKEN_1, "length:" + length + " written:" + written);
@@ -582,23 +962,27 @@ public class Transfer {
         }
         case Value.CLOB: {
             writeInt(CLOB);
-            ValueLob lob = (ValueLob) v;
-            if (lob instanceof ValueLobDatabase) {
-                ValueLobDatabase lobDb = (ValueLobDatabase) lob;
+            ValueClob lob = (ValueClob) v;
+            LobData lobData = lob.getLobData();
+            long charLength = lob.charLength();
+            if (lobData instanceof LobDataDatabase) {
+                LobDataDatabase lobDataDatabase = (LobDataDatabase) lobData;
                 writeLong(-1);
-                writeInt(lobDb.getTableId());
-                writeLong(lobDb.getLobId());
-                writeBytes(calculateLobMac(lobDb.getLobId()));
-                writeLong(lob.getType().getPrecision());
+                writeInt(lobDataDatabase.getTableId());
+                writeLong(lobDataDatabase.getLobId());
+                writeBytes(calculateLobMac(lobDataDatabase.getLobId()));
+                if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+                    writeLong(lob.octetLength());
+                }
+                writeLong(charLength);
                 break;
             }
-            long length = v.getType().getPrecision();
-            if (length < 0) {
+            if (charLength < 0) {
                 throw DbException.get(
-                        ErrorCode.CONNECTION_BROKEN_1, "length=" + length);
+                        ErrorCode.CONNECTION_BROKEN_1, "length=" + charLength);
             }
-            writeLong(length);
-            Reader reader = v.getReader();
+            writeLong(charLength);
+            Reader reader = lob.getReader();
             Data.copyString(reader, out);
             writeInt(LOB_MAGIC);
             break;
@@ -628,35 +1012,9 @@ public class Transfer {
         case Value.ENUM: {
             writeInt(ENUM);
             writeInt(v.getInt());
-            writeString(v.getString());
-            break;
-        }
-        case Value.RESULT_SET: {
-            writeInt(RESULT_SET);
-            ResultInterface result = ((ValueResultSet) v).getResult();
-            int columnCount = result.getVisibleColumnCount();
-            writeInt(columnCount);
-            for (int i = 0; i < columnCount; i++) {
-                TypeInfo columnType = result.getColumnType(i);
-                if (version >= Constants.TCP_PROTOCOL_VERSION_18) {
-                    writeString(result.getAlias(i));
-                    writeString(result.getColumnName(i));
-                    writeTypeInfo(columnType);
-                } else {
-                    writeString(result.getColumnName(i));
-                    writeInt(DataType.convertTypeToSQLType(columnType.getValueType()));
-                    writeInt(MathUtils.convertLongToInt(columnType.getPrecision()));
-                    writeInt(columnType.getScale());
-                }
+            if (version < Constants.TCP_PROTOCOL_VERSION_20) {
+                writeString(v.getString());
             }
-            while (result.next()) {
-                writeBoolean(true);
-                Value[] row = result.currentRow();
-                for (int i = 0; i < columnCount; i++) {
-                    writeValue(row[i]);
-                }
-            }
-            writeBoolean(false);
             break;
         }
         case Value.GEOMETRY:
@@ -718,9 +1076,11 @@ public class Transfer {
     /**
      * Read a value.
      *
+     * @param columnType the data type of value, or {@code null}
      * @return the value
+     * @throws IOException on failure
      */
-    public Value readValue() throws IOException {
+    public Value readValue(TypeInfo columnType) throws IOException {
         int type = readInt();
         switch (type) {
         case NULL:
@@ -758,16 +1118,22 @@ public class Transfer {
         case REAL:
             return ValueReal.get(readFloat());
         case ENUM: {
-            final int ordinal = readInt();
-            final String label = readString();
-            return ValueEnumBase.get(label, ordinal);
+            int ordinal = readInt();
+            if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+                return ((ExtTypeInfoEnum) columnType.getExtTypeInfo()).getValue(ordinal, session);
+            }
+            return ValueEnumBase.get(readString(), ordinal);
         }
         case INTEGER:
             return ValueInteger.get(readInt());
         case BIGINT:
             return ValueBigint.get(readLong());
         case SMALLINT:
-            return ValueSmallint.get((short) readInt());
+            if (version >= Constants.TCP_PROTOCOL_VERSION_20) {
+                return ValueSmallint.get(readShort());
+            } else {
+                return ValueSmallint.get((short) readInt());
+            }
         case VARCHAR:
             return ValueVarchar.get(readString());
         case VARCHAR_IGNORECASE:
@@ -782,8 +1148,7 @@ public class Transfer {
                 long id = readLong();
                 byte[] hmac = readBytes();
                 long precision = readLong();
-                return ValueLobFetchOnDemand.create(Value.BLOB, session.getDataHandler(), tableId, id, hmac, //
-                        precision);
+                return new ValueBlob(new LobDataFetchOnDemand(session.getDataHandler(), tableId, id, hmac), precision);
             }
             Value v = session.getDataHandler().getLobStorage().createBlob(in, length);
             int magic = readInt();
@@ -794,22 +1159,23 @@ public class Transfer {
             return v;
         }
         case CLOB: {
-            long length = readLong();
-            if (length == -1) {
+            long charLength = readLong();
+            if (charLength == -1) {
                 // fetch-on-demand LOB
                 int tableId = readInt();
                 long id = readLong();
                 byte[] hmac = readBytes();
-                long precision = readLong();
-                return ValueLobFetchOnDemand.create(Value.CLOB, session.getDataHandler(), tableId, id, hmac, //
-                        precision);
+                long octetLength = version >= Constants.TCP_PROTOCOL_VERSION_20 ? readLong() : -1L;
+                charLength = readLong();
+                return new ValueClob(new LobDataFetchOnDemand(session.getDataHandler(), tableId, id, hmac),
+                        octetLength, charLength);
             }
-            if (length < 0) {
+            if (charLength < 0) {
                 throw DbException.get(
-                        ErrorCode.CONNECTION_BROKEN_1, "length="+ length);
+                        ErrorCode.CONNECTION_BROKEN_1, "length="+ charLength);
             }
             Value v = session.getDataHandler().getLobStorage().
-                    createClob(new DataReader(in), length);
+                    createClob(new DataReader(in), charLength);
             int magic = readInt();
             if (magic != LOB_MAGIC) {
                 throw DbException.get(
@@ -824,39 +1190,27 @@ public class Transfer {
                 len = ~len;
                 readString();
             }
-            Value[] list = new Value[len];
-            for (int i = 0; i < len; i++) {
-                list[i] = readValue();
+            if (columnType != null) {
+                TypeInfo elementType = (TypeInfo) columnType.getExtTypeInfo();
+                return ValueArray.get(elementType, readArrayElements(len, elementType), session);
             }
-            return ValueArray.get(list, session);
+            return ValueArray.get(readArrayElements(len, null), session);
         }
         case ROW: {
             int len = readInt();
             Value[] list = new Value[len];
+            if (columnType != null) {
+                ExtTypeInfoRow extTypeInfoRow = (ExtTypeInfoRow) columnType.getExtTypeInfo();
+                Iterator<Entry<String, TypeInfo>> fields = extTypeInfoRow.getFields().iterator();
+                for (int i = 0; i < len; i++) {
+                    list[i] = readValue(fields.next().getValue());
+                }
+                return ValueRow.get(columnType, list);
+            }
             for (int i = 0; i < len; i++) {
-                list[i] = readValue();
+                list[i] = readValue(null);
             }
             return ValueRow.get(list);
-        }
-        case RESULT_SET: {
-            SimpleResult rs = new SimpleResult();
-            int columns = readInt();
-            for (int i = 0; i < columns; i++) {
-                if (version >= Constants.TCP_PROTOCOL_VERSION_18) {
-                    rs.addColumn(readString(), readString(), readTypeInfo());
-                } else {
-                    String name = readString();
-                    rs.addColumn(name, name, DataType.convertSQLTypeToValueType(readInt()), readInt(), readInt());
-                }
-            }
-            while (readBoolean()) {
-                Value[] o = new Value[columns];
-                for (int i = 0; i < columns; i++) {
-                    o[i] = readValue();
-                }
-                rs.addRow(o);
-            }
-            return ValueResultSet.get(rs);
         }
         case GEOMETRY:
             return ValueGeometry.get(readBytes());
@@ -872,9 +1226,52 @@ public class Transfer {
         case JSON:
             // Do not trust the value
             return ValueJson.fromJson(readBytes());
+        case DECFLOAT: {
+            String s = readString();
+            switch (s) {
+            case "-Infinity":
+                return ValueDecfloat.NEGATIVE_INFINITY;
+            case "Infinity":
+                return ValueDecfloat.POSITIVE_INFINITY;
+            case "NaN":
+                return ValueDecfloat.NAN;
+            default:
+                return ValueDecfloat.get(new BigDecimal(s));
+            }
+        }
         default:
             throw DbException.get(ErrorCode.CONNECTION_BROKEN_1, "type=" + type);
         }
+    }
+
+    private Value[] readArrayElements(int len, TypeInfo elementType) throws IOException {
+        Value[] list = new Value[len];
+        for (int i = 0; i < len; i++) {
+            list[i] = readValue(elementType);
+        }
+        return list;
+    }
+
+    /**
+     * Read a row count.
+     *
+     * @return the row count
+     * @throws IOException on failure
+     */
+    public long readRowCount() throws IOException {
+        return version >= Constants.TCP_PROTOCOL_VERSION_20 ? readLong() : readInt();
+    }
+
+    /**
+     * Write a row count.
+     *
+     * @param rowCount the row count
+     * @return itself
+     * @throws IOException on failure
+     */
+    public Transfer writeRowCount(long rowCount) throws IOException {
+        return version >= Constants.TCP_PROTOCOL_VERSION_20 ? writeLong(rowCount)
+                : writeInt(rowCount < Integer.MAX_VALUE ? (int) rowCount : Integer.MAX_VALUE);
     }
 
     /**
@@ -891,7 +1288,7 @@ public class Transfer {
      *
      * @param session the session
      */
-    public void setSession(SessionInterface session) {
+    public void setSession(Session session) {
         this.session = session;
     }
 
@@ -908,6 +1305,7 @@ public class Transfer {
      * Open a new connection to the same address and port as this one.
      *
      * @return the new transfer object
+     * @throws IOException on failure
      */
     public Transfer openNewConnection() throws IOException {
         InetAddress address = socket.getInetAddress();
@@ -922,8 +1320,17 @@ public class Transfer {
         this.version = version;
     }
 
-    public synchronized boolean isClosed() {
-        return socket == null || socket.isClosed();
+    public int getVersion() {
+        return version;
+    }
+
+    public boolean isClosed() {
+        lock();
+        try {
+            return socket == null || socket.isClosed();
+        } finally {
+            unlock();
+        }
     }
 
     /**
@@ -946,7 +1353,7 @@ public class Transfer {
             lobMacSalt = MathUtils.secureRandomBytes(LOB_MAC_SALT_LENGTH);
         }
         byte[] data = new byte[8];
-        Bits.writeLong(data, 0, lobId);
+        LONG_VH_BE.set(data, 0, lobId);
         return SHA256.getHashWithSalt(data, lobMacSalt);
     }
 

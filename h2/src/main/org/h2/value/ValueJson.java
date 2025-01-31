@@ -1,11 +1,12 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: Lazarev Nikita <lazarevn@ispras.ru>
  */
 package org.h2.value;
 
 import java.io.ByteArrayOutputStream;
+import java.lang.ref.SoftReference;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -13,11 +14,16 @@ import java.util.Arrays;
 import org.h2.api.ErrorCode;
 import org.h2.message.DbException;
 import org.h2.util.StringUtils;
+import org.h2.util.json.JSONBoolean;
 import org.h2.util.json.JSONByteArrayTarget;
 import org.h2.util.json.JSONBytesSource;
 import org.h2.util.json.JSONItemType;
+import org.h2.util.json.JSONNull;
+import org.h2.util.json.JSONNumber;
 import org.h2.util.json.JSONStringSource;
 import org.h2.util.json.JSONStringTarget;
+import org.h2.util.json.JSONValue;
+import org.h2.util.json.JSONValueTarget;
 
 /**
  * Implementation of the JSON data type.
@@ -47,6 +53,8 @@ public final class ValueJson extends ValueBytesBase {
      * {@code 0} JSON value.
      */
     public static final ValueJson ZERO = new ValueJson(new byte[] { '0' });
+
+    private volatile SoftReference<JSONValue> decompositionRef;
 
     private ValueJson(byte[] value) {
         super(value);
@@ -90,6 +98,21 @@ public final class ValueJson extends ValueBytesBase {
     }
 
     /**
+     * Returns decomposed value.
+     *
+     * @return decomposed value.
+     */
+    public JSONValue getDecomposition() {
+        SoftReference<JSONValue> decompositionRef = this.decompositionRef;
+        JSONValue decomposition;
+        if (decompositionRef == null || (decomposition = decompositionRef.get()) == null) {
+            decomposition = JSONBytesSource.parse(value, new JSONValueTarget());
+            this.decompositionRef = new SoftReference<>(decomposition);
+        }
+        return decomposition;
+    }
+
+    /**
      * Returns JSON value with the specified content.
      *
      * @param s
@@ -103,6 +126,9 @@ public final class ValueJson extends ValueBytesBase {
         try {
             bytes = JSONStringSource.normalize(s);
         } catch (RuntimeException ex) {
+            if (s.length() > 80) {
+                s = new StringBuilder(83).append(s, 0, 80).append("...").toString();
+            }
             throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, s);
         }
         return getInternal(bytes);
@@ -121,9 +147,44 @@ public final class ValueJson extends ValueBytesBase {
         try {
             bytes = JSONBytesSource.normalize(bytes);
         } catch (RuntimeException ex) {
-            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, StringUtils.convertBytesToHex(bytes));
+            StringBuilder builder = new StringBuilder().append("X'");
+            if (bytes.length > 40) {
+                StringUtils.convertBytesToHex(builder, bytes, 40).append("...");
+            } else {
+                StringUtils.convertBytesToHex(builder, bytes);
+            }
+            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, builder.append('\'').toString());
         }
         return getInternal(bytes);
+    }
+
+    /**
+     * Returns JSON value with the specified content.
+     *
+     * @param value
+     *            JSON
+     * @return JSON value
+     * @throws DbException
+     *             on invalid JSON
+     */
+    public static ValueJson fromJson(JSONValue value) {
+        if (value instanceof JSONNull) {
+            return NULL;
+        }
+        if (value instanceof JSONBoolean) {
+            return ((JSONBoolean) value).getBoolean() ? TRUE : FALSE;
+        }
+        if (value instanceof JSONNumber) {
+            // Use equals() to check both value and scale
+            if (((JSONNumber) value).getBigDecimal().equals(BigDecimal.ZERO)) {
+                return ZERO;
+            }
+        }
+        JSONByteArrayTarget target = new JSONByteArrayTarget();
+        value.addTo(target);
+        ValueJson v = new ValueJson(target.getResult());
+        v.decompositionRef = new SoftReference<>(value);
+        return v;
     }
 
     /**
@@ -223,6 +284,11 @@ public final class ValueJson extends ValueBytesBase {
 
     private static ValueJson getNumber(String s) {
         return new ValueJson(s.getBytes(StandardCharsets.ISO_8859_1));
+    }
+
+    @Override
+    public int getMemory() {
+        return value.length + 96;
     }
 
 }

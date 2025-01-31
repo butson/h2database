@@ -1,12 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.engine;
 
 import java.sql.Types;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -22,31 +21,7 @@ import org.h2.value.Value;
 public class Mode {
 
     public enum ModeEnum {
-        REGULAR, DB2, Derby, MSSQLServer, HSQLDB, MySQL, Oracle, PostgreSQL
-    }
-
-    /**
-     * Determines how rows with {@code NULL} values in indexed columns are handled
-     * in unique indexes.
-     */
-    public enum UniqueIndexNullsHandling {
-        /**
-         * Multiple rows with identical values in indexed columns with at least one
-         * indexed {@code NULL} value are allowed in unique index.
-         */
-        ALLOW_DUPLICATES_WITH_ANY_NULL,
-
-        /**
-         * Multiple rows with identical values in indexed columns with all indexed
-         * {@code NULL} values are allowed in unique index.
-         */
-        ALLOW_DUPLICATES_WITH_ALL_NULLS,
-
-        /**
-         * Multiple rows with identical values in indexed columns are not allowed in
-         * unique index.
-         */
-        FORBID_ANY_DUPLICATES
+        REGULAR, STRICT, LEGACY, DB2, Derby, MariaDB, MSSQLServer, HSQLDB, MySQL, Oracle, PostgreSQL
     }
 
     /**
@@ -105,6 +80,28 @@ public class Mode {
         MYSQL_STYLE,
     }
 
+    /**
+     * When CHAR values are right-padded with spaces.
+     */
+    public enum CharPadding {
+        /**
+         * CHAR values are always right-padded with spaces.
+         */
+        ALWAYS,
+
+        /**
+         * Spaces are trimmed from the right side of CHAR values, but CHAR
+         * values in result sets are right-padded with spaces to the declared
+         * length
+         */
+        IN_RESULT_SETS,
+
+        /**
+         * Spaces are trimmed from the right side of CHAR values.
+         */
+        NEVER
+    }
+
     private static final HashMap<String, Mode> MODES = new HashMap<>();
 
     // Modes are also documented in the features section
@@ -138,20 +135,25 @@ public class Mode {
     public boolean squareBracketQuotedNames;
 
     /**
-     * The system columns 'CTID' and 'OID' are supported.
+     * The system columns 'ctid' and 'oid' are supported.
      */
     public boolean systemColumns;
 
     /**
      * Determines how rows with {@code NULL} values in indexed columns are handled
-     * in unique indexes.
+     * in unique indexes and constraints by default.
      */
-    public UniqueIndexNullsHandling uniqueIndexNullsHandling = UniqueIndexNullsHandling.ALLOW_DUPLICATES_WITH_ANY_NULL;
+    public NullsDistinct nullsDistinct = NullsDistinct.DISTINCT;
 
     /**
      * Empty strings are treated like NULL values. Useful for Oracle emulation.
      */
     public boolean treatEmptyStringsAsNull;
+
+    /**
+     * If {@code true} GREATEST and LEAST ignore nulls
+     */
+    public boolean greatestLeastIgnoreNulls;
 
     /**
      * Support the pseudo-table SYSIBM.SYSDUMMY1.
@@ -177,11 +179,6 @@ public class Mode {
      * The function REGEXP_REPLACE() uses \ for back-references.
      */
     public boolean regexpReplaceBackslashReferences;
-
-    /**
-     * SERIAL and BIGSERIAL columns are not automatically primary keys.
-     */
-    public boolean serialColumnIsNotPK;
 
     /**
      * Swap the parameters of the CONVERT function.
@@ -225,9 +222,9 @@ public class Mode {
     public boolean allowEmptyInPredicate;
 
     /**
-     * Whether to right-pad fixed strings with spaces.
+     * How to pad or trim CHAR values.
      */
-    public boolean padFixedLengthStrings;
+    public CharPadding charPadding = CharPadding.ALWAYS;
 
     /**
      * Whether DB2 TIMESTAMP formats are allowed.
@@ -238,11 +235,6 @@ public class Mode {
      * Discard SQLServer table hints (e.g. "SELECT * FROM table WITH (NOLOCK)")
      */
     public boolean discardWithTableHints;
-
-    /**
-     * Use "IDENTITY" as an alias for "auto_increment" (SQLServer style)
-     */
-    public boolean useIdentityAsAutoIncrement;
 
     /**
      * If {@code true}, datetime value function return the same value within a
@@ -272,6 +264,21 @@ public class Mode {
      * If {@code true} non-standard ALTER TABLE MODIFY COLUMN is allowed.
      */
     public boolean alterTableModifyColumn;
+
+    /**
+     * If {@code true} non-standard ALTER TABLE MODIFY COLUMN preserves nullability when changing data type.
+     */
+    public boolean alterTableModifyColumnPreserveNullability;
+
+    /**
+     * If {@code true} MySQL table and column options are allowed
+     */
+    public boolean mySqlTableOptions;
+
+    /**
+     * If {@code true} DELETE identifier FROM is allowed
+     */
+    public boolean deleteIdentifierFrom;
 
     /**
      * If {@code true} TRUNCATE TABLE uses RESTART IDENTITY by default.
@@ -322,15 +329,44 @@ public class Mode {
     public boolean nextValueReturnsDifferentValues;
 
     /**
-     * If {@code true}, case specification may have an optional CASE keyword
-     * after END.
+     * If {@code true}, sequences of generated by default identity columns are
+     * updated when value is provided by user.
      */
-    public boolean allowEndCase;
+    public boolean updateSequenceOnManualIdentityInsertion;
+
+    /**
+     * If {@code true}, last identity of the session is updated on insertion of
+     * a new value into identity column.
+     */
+    public boolean takeInsertedIdentity;
+
+    /**
+     * If {@code true}, last identity of the session is updated on generation of
+     * a new sequence value.
+     */
+    public boolean takeGeneratedSequenceValue;
+
+    /**
+     * If {@code true}, identity columns have DEFAULT ON NULL clause.
+     */
+    public boolean identityColumnsHaveDefaultOnNull;
 
     /**
      * If {@code true}, merge when matched clause may have WHERE clause.
      */
     public boolean mergeWhere;
+
+    /**
+     * If {@code true}, allow using from clause in update statement.
+     */
+    public boolean allowUsingFromClauseInUpdateStatement;
+
+    /**
+     * If {@code true}, referential constraints will create a unique constraint
+     * on referenced columns if it doesn't exist instead of throwing an
+     * exception.
+     */
+    public boolean createUniqueConstraintForReferencedColumns;
 
     /**
      * How column names are generated for expressions.
@@ -343,16 +379,96 @@ public class Mode {
     public ViewExpressionNames viewExpressionNames = ViewExpressionNames.AS_IS;
 
     /**
+     * How column names are generated for CTEs.
+     */
+    public ViewExpressionNames cteExpressionNames = ViewExpressionNames.AS_IS;
+
+    /**
+     * Whether TOP clause in SELECT queries is supported.
+     */
+    public boolean topInSelect;
+
+    /**
+     * Whether TOP clause in DML commands is supported.
+     */
+    public boolean topInDML;
+
+    /**
+     * Whether LIMIT / OFFSET clauses are supported.
+     */
+    public boolean limit;
+
+    /**
+     * Whether MINUS can be used as EXCEPT.
+     */
+    public boolean minusIsExcept;
+
+    /**
+     * Whether IDENTITY pseudo data type is supported.
+     */
+    public boolean identityDataType;
+
+    /**
+     * Whether SERIAL and BIGSERIAL pseudo data types are supported.
+     */
+    public boolean serialDataTypes;
+
+    /**
+     * Whether SQL Server-style IDENTITY clause is supported.
+     */
+    public boolean identityClause;
+
+    /**
+     * Whether MySQL-style AUTO_INCREMENT clause is supported.
+     */
+    public boolean autoIncrementClause;
+
+    /**
+     * Whether DATE data type is parsed as TIMESTAMP(0).
+     */
+    public boolean dateIsTimestamp0;
+
+    /**
+     * Whether MySQL-style DATETIME and YEAR data type is parsed.
+     */
+    public boolean datetimeAndYearType;
+
+    /**
+     * Whether DATETIME, SMALLDATETIME, DATETIME2, and DATETIMEOFFSET data types are parsed.
+     */
+    public boolean datetimeTypes;
+
+    /**
+     * Whether NUMERIC and DECIMAL/DEC without parameters are parsed as DECFLOAT.
+     */
+    public boolean numericIsDecfloat;
+
+    /**
      * An optional Set of hidden/disallowed column types.
      * Certain DBMSs don't support all column types provided by H2, such as
      * "NUMBER" when using PostgreSQL mode.
      */
-    public Set<String> disallowedTypes = Collections.emptySet();
+    public Set<String> disallowedTypes = Set.of();
 
     /**
      * Custom mappings from type names to data types.
      */
     public HashMap<String, DataType> typeByNameMap = new HashMap<>();
+
+    /**
+     * Allow to use GROUP BY n, where n is column index in the SELECT list, similar to ORDER BY
+     */
+    public boolean groupByColumnIndex;
+
+    /**
+     * Allow to compare numeric with BOOLEAN.
+     */
+    public boolean numericWithBooleanComparison;
+
+    /**
+     * Accepts comma ',' as key/value separator in JSON_OBJECT and JSON_OBJECTAGG functions.
+     */
+    public boolean acceptsCommaAsJsonKeyValueSeparator;
 
     private final String name;
 
@@ -362,6 +478,45 @@ public class Mode {
         Mode mode = new Mode(ModeEnum.REGULAR);
         mode.allowEmptyInPredicate = true;
         mode.dateTimeValueWithinTransaction = true;
+        mode.topInSelect = true;
+        mode.limit = true;
+        mode.minusIsExcept = true;
+        mode.identityDataType = true;
+        mode.serialDataTypes = true;
+        mode.autoIncrementClause = true;
+        add(mode);
+
+        mode = new Mode(ModeEnum.STRICT);
+        mode.dateTimeValueWithinTransaction = true;
+        add(mode);
+
+        mode = new Mode(ModeEnum.LEGACY);
+        // Features of REGULAR mode
+        mode.allowEmptyInPredicate = true;
+        mode.dateTimeValueWithinTransaction = true;
+        mode.topInSelect = true;
+        mode.limit = true;
+        mode.minusIsExcept = true;
+        mode.identityDataType = true;
+        mode.serialDataTypes = true;
+        mode.autoIncrementClause = true;
+        // Legacy identity and sequence features
+        mode.identityClause = true;
+        mode.updateSequenceOnManualIdentityInsertion = true;
+        mode.takeInsertedIdentity = true;
+        mode.identityColumnsHaveDefaultOnNull = true;
+        mode.nextvalAndCurrvalPseudoColumns = true;
+        // Legacy DML features
+        mode.topInDML = true;
+        mode.mergeWhere = true;
+        // Legacy DDL features
+        mode.createUniqueConstraintForReferencedColumns = true;
+        // Legacy numeric with boolean comparison
+        mode.numericWithBooleanComparison = true;
+        // Legacy GREATEST and LEAST null treatment
+        mode.greatestLeastIgnoreNulls = true;
+        // Legacy data types
+        mode.datetimeTypes = true;
         add(mode);
 
         mode = new Mode(ModeEnum.DB2);
@@ -376,66 +531,118 @@ public class Mode {
                         "ClientUser|ClientCorrelationToken");
         mode.allowDB2TimestampFormat = true;
         mode.forBitData = true;
+        mode.takeInsertedIdentity = true;
+        mode.nextvalAndCurrvalPseudoColumns = true;
         mode.expressionNames = ExpressionNames.NUMBER;
         mode.viewExpressionNames = ViewExpressionNames.EXCEPTION;
+        mode.cteExpressionNames = ViewExpressionNames.EXCEPTION;
+        mode.limit = true;
+        mode.minusIsExcept = true;
+        mode.numericWithBooleanComparison = true;
         add(mode);
 
         mode = new Mode(ModeEnum.Derby);
         mode.aliasColumnName = true;
-        mode.uniqueIndexNullsHandling = UniqueIndexNullsHandling.FORBID_ANY_DUPLICATES;
+        mode.nullsDistinct = NullsDistinct.NOT_DISTINCT;
         mode.sysDummy1 = true;
         mode.isolationLevelInSelectOrInsertStatement = true;
         // Derby does not support client info properties as of version 10.12.1.1
         mode.supportedClientInfoPropertiesRegEx = null;
         mode.forBitData = true;
+        mode.takeInsertedIdentity = true;
         mode.expressionNames = ExpressionNames.NUMBER;
         mode.viewExpressionNames = ViewExpressionNames.EXCEPTION;
+        mode.cteExpressionNames = ViewExpressionNames.EXCEPTION;
         add(mode);
 
         mode = new Mode(ModeEnum.HSQLDB);
         mode.allowPlusForStringConcat = true;
+        mode.identityColumnsHaveDefaultOnNull = true;
         // HSQLDB does not support client info properties. See
         // http://hsqldb.org/doc/apidocs/org/hsqldb/jdbc/JDBCConnection.html#setClientInfo-java.lang.String-java.lang.String-
         mode.supportedClientInfoPropertiesRegEx = null;
         mode.expressionNames = ExpressionNames.C_NUMBER;
+        mode.cteExpressionNames = ViewExpressionNames.EXCEPTION;
+        mode.topInSelect = true;
+        mode.limit = true;
+        mode.minusIsExcept = true;
+        mode.numericWithBooleanComparison = true;
         add(mode);
 
         mode = new Mode(ModeEnum.MSSQLServer);
         mode.aliasColumnName = true;
         mode.squareBracketQuotedNames = true;
-        mode.uniqueIndexNullsHandling = UniqueIndexNullsHandling.FORBID_ANY_DUPLICATES;
+        mode.nullsDistinct = NullsDistinct.NOT_DISTINCT;
+        mode.greatestLeastIgnoreNulls = true;
         mode.allowPlusForStringConcat = true;
         mode.swapLogFunctionParameters = true;
         mode.swapConvertFunctionParameters = true;
         mode.supportPoundSymbolForColumnNames = true;
         mode.discardWithTableHints = true;
-        mode.useIdentityAsAutoIncrement = true;
         // MS SQL Server does not support client info properties. See
         // https://msdn.microsoft.com/en-Us/library/dd571296%28v=sql.110%29.aspx
         mode.supportedClientInfoPropertiesRegEx = null;
         mode.zeroExLiteralsAreBinaryStrings = true;
         mode.truncateTableRestartIdentity = true;
-        DataType dt = DataType.createNumeric(19, 4, false);
+        mode.takeInsertedIdentity = true;
+        mode.datetimeTypes = true;
+        DataType dt = DataType.createNumeric(19, 4);
         dt.type = Value.NUMERIC;
         dt.sqlType = Types.NUMERIC;
-        dt.name = "MONEY";
+        dt.specialPrecisionScale = true;
         mode.typeByNameMap.put("MONEY", dt);
-        dt = DataType.createNumeric(10, 4, false);
+        dt = DataType.createNumeric(10, 4);
         dt.type = Value.NUMERIC;
         dt.sqlType = Types.NUMERIC;
-        dt.name = "SMALLMONEY";
+        dt.specialPrecisionScale = true;
         mode.typeByNameMap.put("SMALLMONEY", dt);
+        mode.typeByNameMap.put("UNIQUEIDENTIFIER", DataType.getDataType(Value.UUID));
         mode.allowEmptySchemaValuesAsDefaultSchema = true;
         mode.expressionNames = ExpressionNames.EMPTY;
         mode.viewExpressionNames = ViewExpressionNames.EXCEPTION;
+        mode.cteExpressionNames = ViewExpressionNames.EXCEPTION;
+        mode.topInSelect = true;
+        mode.topInDML = true;
+        mode.identityClause = true;
+        mode.numericWithBooleanComparison = true;
+        add(mode);
+
+        mode = new Mode(ModeEnum.MariaDB);
+        mode.indexDefinitionInCreateTable = true;
+        mode.regexpReplaceBackslashReferences = true;
+        mode.onDuplicateKeyUpdate = true;
+        mode.replaceInto = true;
+        mode.charPadding = CharPadding.NEVER;
+        mode.supportedClientInfoPropertiesRegEx = Pattern.compile(".*");
+        mode.zeroExLiteralsAreBinaryStrings = true;
+        mode.allowUnrelatedOrderByExpressionsInDistinctQueries = true;
+        mode.alterTableExtensionsMySQL = true;
+        mode.alterTableModifyColumn = true;
+        mode.mySqlTableOptions = true;
+        mode.deleteIdentifierFrom = true;
+        mode.truncateTableRestartIdentity = true;
+        mode.allNumericTypesHavePrecision = true;
+        mode.nextValueReturnsDifferentValues = true;
+        mode.updateSequenceOnManualIdentityInsertion = true;
+        mode.takeInsertedIdentity = true;
+        mode.identityColumnsHaveDefaultOnNull = true;
+        mode.expressionNames = ExpressionNames.ORIGINAL_SQL;
+        mode.viewExpressionNames = ViewExpressionNames.MYSQL_STYLE;
+        mode.cteExpressionNames = ViewExpressionNames.MYSQL_STYLE;
+        mode.limit = true;
+        mode.autoIncrementClause = true;
+        mode.datetimeAndYearType = true;
+        mode.groupByColumnIndex = true;
+        mode.numericWithBooleanComparison = true;
+        mode.acceptsCommaAsJsonKeyValueSeparator = true;
         add(mode);
 
         mode = new Mode(ModeEnum.MySQL);
         mode.indexDefinitionInCreateTable = true;
-        // Next one is for MariaDB
         mode.regexpReplaceBackslashReferences = true;
         mode.onDuplicateKeyUpdate = true;
         mode.replaceInto = true;
+        mode.charPadding = CharPadding.NEVER;
         // MySQL allows to use any key for client info entries. See
         // https://github.com/mysql/mysql-connector-j/blob/5.1.47/src/com/mysql/jdbc/JDBC4CommentClientInfoProvider.java
         mode.supportedClientInfoPropertiesRegEx =
@@ -444,19 +651,29 @@ public class Mode {
         mode.allowUnrelatedOrderByExpressionsInDistinctQueries = true;
         mode.alterTableExtensionsMySQL = true;
         mode.alterTableModifyColumn = true;
+        mode.mySqlTableOptions = true;
+        mode.deleteIdentifierFrom = true;
         mode.truncateTableRestartIdentity = true;
         mode.allNumericTypesHavePrecision = true;
-        // Next one is for MariaDB
-        mode.nextValueReturnsDifferentValues = true;
-        mode.allowEndCase = true;
+        mode.updateSequenceOnManualIdentityInsertion = true;
+        mode.takeInsertedIdentity = true;
+        mode.identityColumnsHaveDefaultOnNull = true;
+        mode.createUniqueConstraintForReferencedColumns = true;
         mode.expressionNames = ExpressionNames.ORIGINAL_SQL;
         mode.viewExpressionNames = ViewExpressionNames.MYSQL_STYLE;
+        mode.cteExpressionNames = ViewExpressionNames.MYSQL_STYLE;
+        mode.limit = true;
+        mode.autoIncrementClause = true;
+        mode.datetimeAndYearType = true;
+        mode.groupByColumnIndex = true;
+        mode.numericWithBooleanComparison = true;
+        mode.acceptsCommaAsJsonKeyValueSeparator = true;
         add(mode);
 
         mode = new Mode(ModeEnum.Oracle);
         mode.aliasColumnName = true;
         mode.convertOnlyToSmallerScale = true;
-        mode.uniqueIndexNullsHandling = UniqueIndexNullsHandling.ALLOW_DUPLICATES_WITH_ALL_NULLS;
+        mode.nullsDistinct = NullsDistinct.ALL_DISTINCT;
         mode.treatEmptyStringsAsNull = true;
         mode.regexpReplaceBackslashReferences = true;
         mode.supportPoundSymbolForColumnNames = true;
@@ -465,53 +682,57 @@ public class Mode {
         mode.supportedClientInfoPropertiesRegEx =
                 Pattern.compile(".*\\..*");
         mode.alterTableModifyColumn = true;
+        mode.alterTableModifyColumnPreserveNullability = true;
         mode.decimalSequences = true;
         mode.charAndByteLengthUnits = true;
         mode.nextvalAndCurrvalPseudoColumns = true;
         mode.mergeWhere = true;
+        mode.minusIsExcept = true;
         mode.expressionNames = ExpressionNames.ORIGINAL_SQL;
         mode.viewExpressionNames = ViewExpressionNames.EXCEPTION;
-        dt = DataType.getDataType(Value.REAL);
-        mode.typeByNameMap.put("BINARY_FLOAT", dt);
-        dt = DataType.getDataType(Value.DOUBLE);
-        mode.typeByNameMap.put("BINARY_DOUBLE", dt);
-        dt = DataType.createDate(/* 2001-01-01 23:59:59 */ 19, 19, "DATE", false, 0, 0);
-        dt.type = Value.TIMESTAMP;
-        dt.sqlType = Types.TIMESTAMP;
-        dt.name = "DATE";
-        mode.typeByNameMap.put("DATE", dt);
+        mode.dateIsTimestamp0 = true;
+        mode.typeByNameMap.put("BINARY_FLOAT", DataType.getDataType(Value.REAL));
+        mode.typeByNameMap.put("BINARY_DOUBLE", DataType.getDataType(Value.DOUBLE));
         add(mode);
 
         mode = new Mode(ModeEnum.PostgreSQL);
         mode.aliasColumnName = true;
         mode.systemColumns = true;
+        mode.greatestLeastIgnoreNulls = true;
         mode.logIsLogBase10 = true;
         mode.regexpReplaceBackslashReferences = true;
-        mode.serialColumnIsNotPK = true;
         mode.insertOnConflict = true;
         // PostgreSQL only supports the ApplicationName property. See
         // https://github.com/hhru/postgres-jdbc/blob/master/postgresql-jdbc-9.2-1002.src/
         //     org/postgresql/jdbc4/AbstractJdbc4Connection.java
         mode.supportedClientInfoPropertiesRegEx =
                 Pattern.compile("ApplicationName");
-        mode.padFixedLengthStrings = true;
+        mode.charPadding = CharPadding.IN_RESULT_SETS;
         mode.nextValueReturnsDifferentValues = true;
+        mode.takeGeneratedSequenceValue = true;
         mode.expressionNames = ExpressionNames.POSTGRESQL_STYLE;
+        mode.allowUsingFromClauseInUpdateStatement = true;
+        mode.limit = true;
+        mode.serialDataTypes = true;
+        mode.numericIsDecfloat = true;
         // Enumerate all H2 types NOT supported by PostgreSQL:
         Set<String> disallowedTypes = new java.util.HashSet<>();
         disallowedTypes.add("NUMBER");
-        disallowedTypes.add("IDENTITY");
         disallowedTypes.add("TINYINT");
         disallowedTypes.add("BLOB");
+        disallowedTypes.add("VARCHAR_IGNORECASE");
         mode.disallowedTypes = disallowedTypes;
-        dt = DataType.createNumeric(19, 2, false);
+        dt = DataType.getDataType(Value.JSON);
+        mode.typeByNameMap.put("JSONB", dt);
+        dt = DataType.createNumeric(19, 2);
         dt.type = Value.NUMERIC;
         dt.sqlType = Types.NUMERIC;
-        dt.name = "MONEY";
+        dt.specialPrecisionScale = true;
         mode.typeByNameMap.put("MONEY", dt);
         dt = DataType.getDataType(Value.INTEGER);
         mode.typeByNameMap.put("OID", dt);
         mode.dateTimeValueWithinTransaction = true;
+        mode.groupByColumnIndex = true;
         add(mode);
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,6 +11,7 @@ import static org.h2.util.DateTimeUtils.NANOS_PER_MINUTE;
 import static org.h2.util.DateTimeUtils.NANOS_PER_SECOND;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 
 import org.h2.api.Interval;
@@ -45,9 +46,26 @@ public final class ValueInterval extends Value {
      */
     public static final int MAXIMUM_SCALE = 9;
 
-    private final int valueType;
+    private static final long[] MULTIPLIERS = {
+            // INTERVAL_SECOND
+            DateTimeUtils.NANOS_PER_SECOND,
+            // INTERVAL_YEAR_TO_MONTH
+            12,
+            // INTERVAL_DAY_TO_HOUR
+            24,
+            // INTERVAL_DAY_TO_MINUTE
+            24 * 60,
+            // INTERVAL_DAY_TO_SECOND
+            DateTimeUtils.NANOS_PER_DAY,
+            // INTERVAL_HOUR_TO_MINUTE:
+            60,
+            // INTERVAL_HOUR_TO_SECOND
+            DateTimeUtils.NANOS_PER_HOUR,
+            // INTERVAL_MINUTE_TO_SECOND
+            DateTimeUtils.NANOS_PER_MINUTE //
+    };
 
-    private TypeInfo type;
+    private final int valueType;
 
     private final boolean negative;
 
@@ -150,21 +168,7 @@ public final class ValueInterval extends Value {
 
     @Override
     public TypeInfo getType() {
-        TypeInfo type = this.type;
-        if (type == null) {
-            long l = leading;
-            int precision = 0;
-            while (l > 0) {
-                precision++;
-                l /= 10;
-            }
-            if (precision == 0) {
-                precision = 1;
-            }
-            this.type = type = new TypeInfo(valueType, precision, 0,
-                    getDisplaySize(valueType, MAXIMUM_PRECISION, MAXIMUM_SCALE), null);
-        }
-        return type;
+        return TypeInfo.getTypeInfo(valueType);
     }
 
     @Override
@@ -181,7 +185,8 @@ public final class ValueInterval extends Value {
     /**
      * Check if the precision is smaller or equal than the given precision.
      *
-     * @param prec the maximum precision
+     * @param prec
+     *            the maximum precision
      * @return true if the precision of this value is smaller or equal to the
      *         given precision
      */
@@ -242,61 +247,53 @@ public final class ValueInterval extends Value {
 
     @Override
     public long getLong() {
-        if (valueType <= INTERVAL_MINUTE) {
-            return negative ? -leading : leading;
+        long l = leading;
+        if (valueType >= INTERVAL_SECOND && remaining != 0L
+                && remaining >= MULTIPLIERS[valueType - INTERVAL_SECOND] >> 1) {
+            l++;
         }
-        return getBigDecimal().setScale(0, RoundingMode.HALF_UP).longValue();
+        return negative ? -l : l;
+    }
+
+    @Override
+    public BigInteger getBigInteger() {
+        return BigInteger.valueOf(getLong());
     }
 
     @Override
     public BigDecimal getBigDecimal() {
-        long multiplier;
-        switch (valueType) {
-        case INTERVAL_YEAR:
-        case INTERVAL_MONTH:
-        case INTERVAL_DAY:
-        case INTERVAL_HOUR:
-        case INTERVAL_MINUTE:
+        if (valueType < INTERVAL_SECOND || remaining == 0L) {
             return BigDecimal.valueOf(negative ? -leading : leading);
-        case INTERVAL_SECOND:
-            multiplier = DateTimeUtils.NANOS_PER_SECOND;
-            break;
-        case INTERVAL_YEAR_TO_MONTH: {
-            multiplier = 12;
-            break;
         }
-        case INTERVAL_DAY_TO_HOUR:
-            multiplier = 24;
-            break;
-        case INTERVAL_DAY_TO_MINUTE:
-            multiplier = 24 * 60;
-            break;
-        case INTERVAL_DAY_TO_SECOND:
-            multiplier = DateTimeUtils.NANOS_PER_DAY;
-            break;
-        case INTERVAL_HOUR_TO_MINUTE:
-            multiplier = 60;
-            break;
-        case INTERVAL_HOUR_TO_SECOND:
-            multiplier = DateTimeUtils.NANOS_PER_HOUR;
-            break;
-        case INTERVAL_MINUTE_TO_SECOND:
-            multiplier = DateTimeUtils.NANOS_PER_MINUTE;
-            break;
-        default:
-            throw DbException.getUnsupportedException("valueType = " + valueType);
-        }
-        BigDecimal bd = BigDecimal.valueOf(leading);
-        if (remaining != 0L) {
-            BigDecimal m = BigDecimal.valueOf(multiplier);
-            bd = bd.add(BigDecimal.valueOf(remaining).divide(m, m.precision(), RoundingMode.HALF_DOWN))
-                    .stripTrailingZeros();
-        }
+        BigDecimal m = BigDecimal.valueOf(MULTIPLIERS[valueType - INTERVAL_SECOND]);
+        BigDecimal bd = BigDecimal.valueOf(leading)
+                .add(BigDecimal.valueOf(remaining).divide(m, m.precision(), RoundingMode.HALF_DOWN)) //
+                .stripTrailingZeros();
         return negative ? bd.negate() : bd;
     }
 
     @Override
-    public Object getObject() {
+    public float getFloat() {
+        if (valueType < INTERVAL_SECOND || remaining == 0L) {
+            return negative ? -leading : leading;
+        }
+        return getBigDecimal().floatValue();
+    }
+
+    @Override
+    public double getDouble() {
+        if (valueType < INTERVAL_SECOND || remaining == 0L) {
+            return negative ? -leading : leading;
+        }
+        return getBigDecimal().doubleValue();
+    }
+
+    /**
+     * Returns the interval.
+     *
+     * @return the interval
+     */
+    public Interval getInterval() {
         return new Interval(getQualifier(), negative, leading, remaining);
     }
 

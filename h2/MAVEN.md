@@ -5,7 +5,7 @@ Welcome to H2, the Java SQL database. The main features of H2 are:
 * Very fast, open source, JDBC API
 * Embedded and server modes; in-memory databases
 * Browser based Console application
-* Small footprint: around 2 MB jar file size
+* Small footprint: around 2.5 MB jar file size
 
 ## Experimental Building & Testing with Maven
 
@@ -44,7 +44,8 @@ or
 ```
 
 Please note that jar generated with Maven is larger than official one and it does not include OSGi attributes.
-Use build script with `jar` target instead if you need a compatible jar.
+Its configuration for native-image tool is also incomplete.
+Use build script with `jar` target instead if you need a jar compatible with official builds.
 
 ### Testing
 

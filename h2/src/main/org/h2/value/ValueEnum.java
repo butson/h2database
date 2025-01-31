@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -32,7 +32,7 @@ public final class ValueEnum extends ValueEnumBase {
     public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
         if ((sqlFlags & NO_CASTS) == 0) {
             StringUtils.quoteStringSQL(builder.append("CAST("), label).append(" AS ");
-            return enumerators.getType().getSQL(builder).append(')');
+            return enumerators.getType().getSQL(builder, sqlFlags).append(')');
         }
         return StringUtils.quoteStringSQL(builder, label);
     }

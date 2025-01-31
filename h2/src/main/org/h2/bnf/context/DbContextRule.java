@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -69,21 +69,28 @@ public class DbContextRule implements Rule {
 
     @Override
     public boolean autoComplete(Sentence sentence) {
-        String query = sentence.getQuery(), s = query;
-        String up = sentence.getQueryUpper();
+        final String query = sentence.getQuery();
+        String s = query;
         switch (type) {
         case SCHEMA: {
             DbSchema[] schemas = contents.getSchemas();
             String best = null;
             DbSchema bestSchema = null;
             for (DbSchema schema: schemas) {
-                String name = StringUtils.toUpperEnglish(schema.name);
-                if (up.startsWith(name)) {
+                String name = schema.name;
+                String quotedName = StringUtils.quoteIdentifier(name);
+                if (StringUtils.startsWithIgnoringCase(query, name)) {
                     if (best == null || name.length() > best.length()) {
                         best = name;
                         bestSchema = schema;
                     }
-                } else if (s.length() == 0 || name.startsWith(up)) {
+                } else if (StringUtils.startsWith(query, quotedName)) {
+                    if (best == null || name.length() > best.length()) {
+                        best = quotedName;
+                        bestSchema = schema;
+                    }
+                } else if (s.isEmpty() || StringUtils.startsWithIgnoringCase(name, query)
+                        || StringUtils.startsWithIgnoringCase(quotedName, query)) {
                     if (s.length() < name.length()) {
                         sentence.add(name, name.substring(s.length()), type);
                         sentence.add(schema.quotedName + ".",
@@ -107,18 +114,17 @@ public class DbContextRule implements Rule {
             String best = null;
             DbTableOrView bestTable = null;
             for (DbTableOrView table : tables) {
-                String compare = up;
-                String name = StringUtils.toUpperEnglish(table.getName());
-                if (table.getQuotedName().length() > name.length()) {
-                    name = table.getQuotedName();
-                    compare = query;
-                }
-                if (compare.startsWith(name)) {
+                String name = table.getName();
+                String quotedName = StringUtils.quoteIdentifier(name);
+
+                if (StringUtils.startsWithIgnoringCase(query, name)
+                        || StringUtils.startsWithIgnoringCase("\"" + query, quotedName)) {
                     if (best == null || name.length() > best.length()) {
                         best = name;
                         bestTable = table;
                     }
-                } else if (s.length() == 0 || name.startsWith(compare)) {
+                } else if (s.isEmpty() || StringUtils.startsWithIgnoringCase(name, query)
+                        || StringUtils.startsWithIgnoringCase(quotedName, query)) {
                     if (s.length() < name.length()) {
                         sentence.add(table.getQuotedName(),
                                 table.getQuotedName().substring(s.length()),
@@ -144,16 +150,14 @@ public class DbContextRule implements Rule {
             if (query.indexOf(' ') < 0) {
                 break;
             }
-            for (; i < up.length(); i++) {
-                char ch = up.charAt(i);
-                if (ch != '_' && !Character.isLetterOrDigit(ch)) {
-                    break;
-                }
-            }
-            if (i == 0) {
+            int l = query.length(), cp;
+            if (!Character.isJavaIdentifierStart(cp = query.codePointAt(i)) || cp == '$') {
                 break;
             }
-            String alias = up.substring(0, i);
+            while ((i += Character.charCount(cp)) < l && Character.isJavaIdentifierPart(cp = query.codePointAt(i))) {
+                //
+            }
+            String alias = query.substring(0, i);
             if (ParserUtil.isKeyword(alias, false)) {
                 break;
             }
@@ -166,19 +170,17 @@ public class DbContextRule implements Rule {
             DbTableOrView last = sentence.getLastMatchedTable();
             if (last != null && last.getColumns() != null) {
                 for (DbColumn column : last.getColumns()) {
-                    String compare = up;
-                    String name = StringUtils.toUpperEnglish(column.getName());
+                    String compare = query;
+                    String name = column.getName();
                     if (column.getQuotedName().length() > name.length()) {
                         name = column.getQuotedName();
                         compare = query;
                     }
-                    if (compare.startsWith(name) &&
-                            (columnType == null ||
-                            column.getDataType().contains(columnType))) {
+                    if (StringUtils.startsWithIgnoringCase(compare, name) && testColumnType(column)) {
                         String b = s.substring(name.length());
                         if (best == null || b.length() < best.length()) {
                             best = b;
-                        } else if (s.length() == 0 || name.startsWith(compare)) {
+                        } else if (s.isEmpty() || StringUtils.startsWithIgnoringCase(name, compare)) {
                             if (s.length() < name.length()) {
                                 sentence.add(column.getName(),
                                         column.getName().substring(s.length()),
@@ -197,16 +199,14 @@ public class DbContextRule implements Rule {
                         continue;
                     }
                     for (DbColumn column : table.getColumns()) {
-                        String name = StringUtils.toUpperEnglish(column
-                                .getName());
-                        if (columnType == null
-                                || column.getDataType().contains(columnType)) {
-                            if (up.startsWith(name)) {
+                        String name = column.getName();
+                        if (testColumnType(column)) {
+                            if (StringUtils.startsWithIgnoringCase(query, name)) {
                                 String b = s.substring(name.length());
                                 if (best == null || b.length() < best.length()) {
                                     best = b;
                                 }
-                            } else if (s.length() == 0 || name.startsWith(up)) {
+                            } else if (s.isEmpty() || StringUtils.startsWithIgnoringCase(name, query)) {
                                 if (s.length() < name.length()) {
                                     sentence.add(column.getName(),
                                             column.getName().substring(s.length()),
@@ -226,7 +226,7 @@ public class DbContextRule implements Rule {
             autoCompleteProcedure(sentence);
             break;
         default:
-            throw DbException.throwInternalError("type=" + type);
+            throw DbException.getInternalError("type=" + type);
         }
         if (!s.equals(query)) {
             while (Bnf.startWithSpace(s)) {
@@ -237,6 +237,21 @@ public class DbContextRule implements Rule {
         }
         return false;
     }
+
+    private boolean testColumnType(DbColumn column) {
+        if (columnType == null) {
+            return true;
+        }
+        String type = column.getDataType();
+        if (columnType.contains("CHAR") || columnType.contains("CLOB")) {
+            return type.contains("CHAR") || type.contains("CLOB");
+        }
+        if (columnType.contains("BINARY") || columnType.contains("BLOB")) {
+            return type.contains("BINARY") || type.contains("BLOB");
+        }
+        return type.contains(columnType);
+    }
+
     private void autoCompleteProcedure(Sentence sentence) {
         DbSchema schema = sentence.getLastMatchedSchema();
         if (schema == null) {
@@ -314,7 +329,7 @@ public class DbContextRule implements Rule {
                 return s;
             }
             s = s.substring(alias.length());
-            if (s.length() == 0) {
+            if (s.isEmpty()) {
                 sentence.add(alias + ".", ".", Sentence.CONTEXT);
             }
             return s;
@@ -329,7 +344,7 @@ public class DbContextRule implements Rule {
                         (best == null || tableName.length() > best.length())) {
                     sentence.setLastMatchedTable(table);
                     best = tableName;
-                } else if (s.length() == 0 || tableName.startsWith(alias)) {
+                } else if (s.isEmpty() || tableName.startsWith(alias)) {
                     sentence.add(tableName + ".",
                             tableName.substring(s.length()) + ".",
                             Sentence.CONTEXT);
@@ -337,7 +352,7 @@ public class DbContextRule implements Rule {
             }
             if (best != null) {
                 s = s.substring(best.length());
-                if (s.length() == 0) {
+                if (s.isEmpty()) {
                     sentence.add(alias + ".", ".", Sentence.CONTEXT);
                 }
                 return s;

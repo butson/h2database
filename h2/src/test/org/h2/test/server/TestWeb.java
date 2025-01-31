@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -15,7 +15,6 @@ import java.net.ConnectException;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.sql.Connection;
-import java.sql.SQLException;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Locale;
@@ -26,6 +25,8 @@ import javax.servlet.AsyncContext;
 import javax.servlet.DispatcherType;
 import javax.servlet.RequestDispatcher;
 import javax.servlet.ServletConfig;
+import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
 import javax.servlet.ServletInputStream;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.ServletRequest;
@@ -37,17 +38,17 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import javax.servlet.http.HttpUpgradeHandler;
 import javax.servlet.http.Part;
-import javax.servlet.ServletContext;
-import javax.servlet.ServletException;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.Constants;
 import org.h2.engine.SysProperties;
+import org.h2.jdbc.JdbcSQLFeatureNotSupportedException;
+import org.h2.jdbc.JdbcSQLNonTransientException;
+import org.h2.server.web.WebServer;
 import org.h2.server.web.WebServlet;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
-import org.h2.test.utils.AssertThrows;
 import org.h2.tools.Server;
 import org.h2.util.StringUtils;
 import org.h2.util.Task;
@@ -78,14 +79,14 @@ public class TestWeb extends TestDb {
         testServer();
         testWebApp();
         testIfExists();
+
+        testSpecialAutoComplete();
     }
 
     private void testServlet() throws Exception {
         WebServlet servlet = new WebServlet();
         final HashMap<String, String> configMap = new HashMap<>();
         configMap.put("ifExists", "");
-        configMap.put("", "");
-        configMap.put("", "");
         configMap.put("", "");
         ServletConfig config = new ServletConfig() {
 
@@ -123,41 +124,34 @@ public class TestWeb extends TestDb {
         servlet.destroy();
     }
 
-    private static void testWrongParameters() {
-        new AssertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1) {
-            @Override
-            public void test() throws SQLException {
-                Server.createPgServer("-pgPort 8182");
-        }};
-        new AssertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1) {
-            @Override
-            public void test() throws SQLException {
-                Server.createTcpServer("-tcpPort 8182");
-        }};
-        new AssertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1) {
-            @Override
-            public void test() throws SQLException {
-                Server.createWebServer("-webPort=8182");
-        }};
+    private void testWrongParameters() {
+        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, () -> Server.createPgServer("-pgPort 8182"));
+        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, () -> Server.createTcpServer("-tcpPort 8182"));
+        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, () -> Server.createWebServer("-webPort=8182"));
     }
 
     private void testAlreadyRunning() throws Exception {
         Server server = Server.createWebServer(
                 "-webPort", "8182", "-properties", "null");
         server.start();
-        assertContains(server.getStatus(), "server running");
-        Server server2 = Server.createWebServer(
-                "-webPort", "8182", "-properties", "null");
-        assertEquals("Not started", server2.getStatus());
         try {
-            server2.start();
-            fail();
-        } catch (Exception e) {
-            assertContains(e.toString(), "port may be in use");
-            assertContains(server2.getStatus(),
-                    "could not be started");
+            assertContains(server.getStatus(), "server running");
+            Server server2 = Server.createWebServer(
+                    "-webPort", "8182", "-properties", "null");
+            assertEquals("Not started", server2.getStatus());
+            try {
+                server2.start();
+                fail();
+            } catch (Exception e) {
+                assertContains(e.toString(), "port may be in use");
+                assertContains(server2.getStatus(),
+                        "could not be started");
+            } finally {
+                server2.stop();
+            }
+        } finally {
+            server.stop();
         }
-        server.stop();
     }
 
     private void testTools() throws Exception {
@@ -169,10 +163,25 @@ public class TestWeb extends TestDb {
         conn.createStatement().execute(
                 "create table test(id int) as select 1");
         conn.close();
+        String hash = WebServer.encodeAdminPassword("1234567890AB");
+        try {
+            Server.main("-web", "-webPort", "8182",
+                    "-properties", "null", "-tcp", "-tcpPort", "9101", "-webAdminPassword", hash);
+            fail("Expected exception");
+        } catch (JdbcSQLFeatureNotSupportedException e) {
+            // Expected
+        }
         Server server = new Server();
         server.setOut(new PrintStream(new ByteArrayOutputStream()));
+        try {
+            server.runTool("-web", "-webPort", "8182",
+                    "-properties", "null", "-tcp", "-tcpPort", "9101", "-webAdminPassword", "123");
+            fail("Expected exception");
+        } catch (JdbcSQLNonTransientException e) {
+            // Expected
+        }
         server.runTool("-web", "-webPort", "8182",
-                "-properties", "null", "-tcp", "-tcpPort", "9101", "-webAdminPassword", "123");
+                "-properties", "null", "-tcp", "-tcpPort", "9101", "-webAdminPassword", hash);
         try {
             String url = "http://localhost:8182";
             WebClient client;
@@ -180,7 +189,7 @@ public class TestWeb extends TestDb {
             client = new WebClient();
             result = client.get(url);
             client.readSessionId(result);
-            result = client.get(url, "adminLogin.do?password=123");
+            result = client.get(url, "adminLogin.do?password=1234567890AB");
             result = client.get(url, "tools.jsp");
             FileUtils.delete(getBaseDir() + "/backup.zip");
             result = client.get(url, "tools.do?tool=Backup&args=-dir," +
@@ -191,12 +200,7 @@ public class TestWeb extends TestDb {
             result = client.get(url,
                     "tools.do?tool=DeleteDbFiles&args=-dir," +
                     getBaseDir() + ",-db," + getTestName());
-            String fn = getBaseDir() + "/" + getTestName();
-            if (config.mvStore) {
-                fn += Constants.SUFFIX_MV_FILE;
-            } else {
-                fn += Constants.SUFFIX_PAGE_FILE;
-            }
+            String fn = getBaseDir() + "/" + getTestName() + Constants.SUFFIX_MV_FILE;
             assertFalse(FileUtils.exists(fn));
             result = client.get(url, "tools.do?tool=Restore&args=-dir," +
                     getBaseDir() + ",-db," + getTestName() +",-file," + getBaseDir() +
@@ -476,20 +480,15 @@ public class TestWeb extends TestDb {
             assertContains(result, "Ok");
             result = client.get(url, "query.do?sql=@catalogs");
             assertContains(result, "PUBLIC");
-            result = client.get(url,
-                    "query.do?sql=@column_privileges null null null TEST null");
+            result = client.get(url, "query.do?sql=@column_privileges null null TEST null");
             assertContains(result, "PRIVILEGE");
-            result = client.get(url,
-                    "query.do?sql=@cross_references null null null TEST");
+            result = client.get(url, "query.do?sql=@cross_references null null TEST null null TEST");
             assertContains(result, "PKTABLE_NAME");
-            result = client.get(url,
-                    "query.do?sql=@exported_keys null null null TEST");
+            result = client.get(url, "query.do?sql=@exported_keys null null TEST");
             assertContains(result, "PKTABLE_NAME");
-            result = client.get(url,
-                    "query.do?sql=@imported_keys null null null TEST");
+            result = client.get(url, "query.do?sql=@imported_keys null null TEST");
             assertContains(result, "PKTABLE_NAME");
-            result = client.get(url,
-                    "query.do?sql=@primary_keys null null null TEST");
+            result = client.get(url, "query.do?sql=@primary_keys null null TEST");
             assertContains(result, "PK_NAME");
             result = client.get(url, "query.do?sql=@procedures null null null");
             assertContains(result, "PROCEDURE_NAME");
@@ -500,23 +499,22 @@ public class TestWeb extends TestDb {
             result = client.get(url, "query.do?sql=@table_privileges");
             assertContains(result, "PRIVILEGE");
             result = client.get(url, "query.do?sql=@table_types");
-            assertContains(result, "SYSTEM TABLE");
+            assertContains(result, "BASE TABLE");
             result = client.get(url, "query.do?sql=@type_info");
-            assertContains(result, "CLOB");
+            assertContains(result, "CHARACTER LARGE OBJECT");
             result = client.get(url, "query.do?sql=@version_columns");
             assertContains(result, "PSEUDO_COLUMN");
             result = client.get(url, "query.do?sql=@attributes");
-            assertContains(result, "Feature not supported: &quot;attributes&quot;");
+            assertContains(result, "ATTR_NAME");
             result = client.get(url, "query.do?sql=@super_tables");
             assertContains(result, "SUPERTABLE_NAME");
             result = client.get(url, "query.do?sql=@super_types");
-            assertContains(result, "Feature not supported: &quot;superTypes&quot;");
+            assertContains(result, "SUPERTYPE_NAME");
             result = client.get(url, "query.do?sql=@prof_start");
             assertContains(result, "Ok");
             result = client.get(url, "query.do?sql=@prof_stop");
             assertContains(result, "Top Stack Trace(s)");
-            result = client.get(url,
-                    "query.do?sql=@best_row_identifier null null TEST");
+            result = client.get(url, "query.do?sql=@best_row_identifier null null TEST");
             assertContains(result, "SCOPE");
             assertContains(result, "COLUMN_NAME");
             assertContains(result, "ID");
@@ -560,6 +558,100 @@ public class TestWeb extends TestDb {
             result = client.get(url, "settingRemove.do?name=_test_");
 
             client.get(url, "admin.do");
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    private void testSpecialAutoComplete() throws Exception {
+        Server server = new Server();
+        server.setOut(new PrintStream(new ByteArrayOutputStream()));
+        server.runTool("-ifNotExists", "-web", "-webPort", "8182", "-properties", "null", "-tcp", "-tcpPort", "9101");
+        try {
+            String url = "http://localhost:8182";
+            WebClient client;
+            String result;
+            client = new WebClient();
+            result = client.get(url);
+            client.readSessionId(result);
+            client.get(url, "login.jsp");
+
+            result = client.get(url, "login.do?driver=org.h2.Driver" +
+                    "&url=jdbc:h2:mem:" + getTestName() +
+                    "&user=sa&password=sa&name=_test_");
+            result = client.get(url, "header.jsp");
+
+            result = client.get(url, "query.do?sql=" +
+                    "create schema test_schema;" +
+                    "create schema \"quoted schema\";" +
+                    "create table test_schema.test_table(id int primary key, name varchar);" +
+                    "insert into test_schema.test_table values(1, 'Hello');" +
+                    "create table \"quoted schema\".\"quoted tablename\"(id int primary key, name varchar);");
+            result = client.get(url, "query.do?sql=create sequence test_schema.test_sequence");
+            result = client.get(url, "query.do?sql=" +
+                    "create view test_schema.test_view as select * from test");
+            result = client.get(url, "tables.do");
+
+            result = client.get(url, "query.jsp");
+
+            // unquoted autoComplete
+            result = client.get(url, "autoCompleteList.do?query=select * from test_schema.test");
+            assertContains(StringUtils.urlDecode(result), "test_table");
+
+            // this shall succeed, because "TEST_SCHEMA" exists
+            result = client.get(url, "autoCompleteList.do?query=select * from TEST");
+            assertContains(StringUtils.urlDecode(result), "test_schema");
+
+            // this shall also succeed, because "TEST_SCHEMA" is similar
+            result = client.get(url, "autoCompleteList.do?query=select * from \"TEST");
+            assertContains(StringUtils.urlDecode(result), "test_schema");
+
+            // this shall succeed, because "TEST_SCHEMA" exists
+            result = client.get(url, "autoCompleteList.do?query=select * from \"TEST_SCHEMA\".test");
+            assertContains(StringUtils.urlDecode(result), "test_table");
+
+            // this shall succeed, because "TEST_SCHEMA" and "TEST_TABLE exist
+            result = client.get(url, "autoCompleteList.do?query=select * from \"TEST_SCHEMA\".\"TEST");
+            assertContains(StringUtils.urlDecode(result), "test_table");
+
+            // this shall also succeed, because we want to be lenient on table names
+            result = client.get(url, "autoCompleteList.do?query=select * from \"TEST_SCHEMA\".\"test");
+            assertContains(StringUtils.urlDecode(result), "test_table");
+
+            // this shall fail, because there is no "test_schema"
+            result = client.get(url, "autoCompleteList.do?query=select * from \"test_schema\".test");
+            assertNotContaining(StringUtils.urlDecode(result),"test_table");
+
+            // this shall not return any suggestion since there is no "test_schema"
+            result = client.get(url, "autoCompleteList.do?query=select * from \"test_schema\".");
+            assertEmpty(StringUtils.urlDecode(result));
+
+            // this shall not return anything, because there is no TEST_TABLE1
+            result = client.get(url, "autoCompleteList.do?query=select * from \"TEST_SCHEMA\".\"test_table1");
+            assertEmpty(StringUtils.urlDecode(result));
+
+            // explicitly quoted schemas
+            result = client.get(url, "autoCompleteList.do?query=select * from \"quoted");
+            assertContains(StringUtils.urlDecode(result),"quoted schema");
+
+            // explicitly quoted schemas, very lax
+            result = client.get(url, "autoCompleteList.do?query=select * from quoted");
+            assertContains(StringUtils.urlDecode(result),"quoted schema");
+
+            // explicitly quoted tablenames
+            result = client.get(url, "autoCompleteList.do?query=select * from \"quoted schema\".\"quoted");
+            assertContains(StringUtils.urlDecode(result),"quoted tablename");
+
+            // explicitly quoted tablename, but lax
+            result = client.get(url, "autoCompleteList.do?query=select * from \"quoted schema\".QUOTED");
+            assertContains(StringUtils.urlDecode(result),"quoted tablename");
+
+            // this one must fail
+            result = client.get(url, "autoCompleteList.do?query=select * from \"quoted schema\".QUOTED1");
+            assertNotContaining(StringUtils.urlDecode(result),"quoted tablename");
+
+            result = client.get(url, "logout.do");
+
         } finally {
             server.shutdown();
         }
@@ -1195,7 +1287,7 @@ public class TestWeb extends TestDb {
 
         @Override
         public String toString() {
-            return new String(buff.toByteArray(), StandardCharsets.UTF_8);
+            return buff.toString(StandardCharsets.UTF_8);
         }
 
         @Override

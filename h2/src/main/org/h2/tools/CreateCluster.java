@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,8 +8,6 @@ package org.h2.tools;
 import java.io.IOException;
 import java.io.PipedReader;
 import java.io.PipedWriter;
-import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -17,19 +15,20 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import org.h2.jdbc.JdbcConnection;
 import org.h2.util.Tool;
 
 /**
  * Creates a cluster from a stand-alone database.
- * <br />
+ *
  * Copies a database to another location if required.
- * @h2.resource
  */
 public class CreateCluster extends Tool {
 
     /**
-     * Options are case sensitive. Supported options are:
+     * Options are case sensitive.
      * <table>
+     * <caption>Supported options</caption>
      * <tr><td>[-help] or [-?]</td>
      * <td>Print the list of options</td></tr>
      * <tr><td>[-urlSource "&lt;url&gt;"]</td>
@@ -43,9 +42,9 @@ public class CreateCluster extends Tool {
      * <tr><td>[-serverList &lt;list&gt;]</td>
      * <td>The comma separated list of host names or IP addresses</td></tr>
      * </table>
-     * @h2.resource
      *
      * @param args the command line arguments
+     * @throws SQLException on failure
      */
     public static void main(String... args) throws SQLException {
         new CreateCluster().runTool(args);
@@ -92,6 +91,7 @@ public class CreateCluster extends Tool {
      * @param user the user name
      * @param password the password
      * @param serverList the server list
+     * @throws SQLException on failure
      */
     public void execute(String urlSource, String urlTarget,
             String user, String password, String serverList) throws SQLException {
@@ -100,11 +100,9 @@ public class CreateCluster extends Tool {
 
     private static void process(String urlSource, String urlTarget,
             String user, String password, String serverList) throws SQLException {
-        org.h2.Driver.load();
-
         // use cluster='' so connecting is possible
         // even if the cluster is enabled
-        try (Connection connSource = DriverManager.getConnection(urlSource + ";CLUSTER=''", user, password);
+        try (JdbcConnection connSource = new JdbcConnection(urlSource + ";CLUSTER=''", null, user, password, false);
                 Statement statSource = connSource.createStatement()) {
             // enable the exclusive mode and close other connections,
             // so that data can't change while restoring the second database
@@ -122,7 +120,7 @@ public class CreateCluster extends Tool {
             String serverList) throws SQLException {
 
         // Delete the target database first.
-        try (Connection connTarget = DriverManager.getConnection(urlTarget + ";CLUSTER=''", user, password);
+        try (JdbcConnection connTarget = new JdbcConnection(urlTarget + ";CLUSTER=''", null, user, password, false);
                 Statement statTarget = connTarget.createStatement()) {
             statTarget.execute("DROP ALL OBJECTS DELETE FILES");
         }
@@ -131,7 +129,7 @@ public class CreateCluster extends Tool {
             Future<?> threadFuture = startWriter(pipeReader, statSource);
 
             // Read data from pipe reader, restore on target.
-            try (Connection connTarget = DriverManager.getConnection(urlTarget, user, password);
+            try (JdbcConnection connTarget = new JdbcConnection(urlTarget, null, user, password, false);
                     Statement statTarget = connTarget.createStatement()) {
                 RunScript.execute(connTarget, pipeReader);
 

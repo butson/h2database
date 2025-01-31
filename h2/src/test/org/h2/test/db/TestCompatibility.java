@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -15,6 +15,8 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicReference;
+
 import org.h2.api.ErrorCode;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
@@ -49,6 +51,7 @@ public class TestCompatibility extends TestDb {
         testPostgreSQL();
         testHsqlDb();
         testMySQL();
+        testConcurrentAutoIncrement();
         testDB2();
         testDerby();
         testSybaseAndMSSQLServer();
@@ -58,6 +61,8 @@ public class TestCompatibility extends TestDb {
         conn.close();
         testIdentifiers();
         testIdentifiersCaseInResultSet();
+        testDatabaseToLowerParser();
+        testOldInformationSchema();
         deleteDb("compatibility");
 
         testUnknownURL();
@@ -146,16 +151,18 @@ public class TestCompatibility extends TestDb {
             stat.execute("SET MODE " + mode);
             ResultSet rs = stat.executeQuery("SELECT ID I FROM TEST");
             ResultSetMetaData meta = rs.getMetaData();
+            assertEquals(mode + " mode", "I", meta.getColumnLabel(1));
             String columnName = meta.getColumnName(1);
             String tableName = meta.getTableName(1);
-            if ("ID".equals(columnName) && "TEST".equals(tableName)) {
-                assertTrue(mode + " mode should not support columnAlias",
-                        columnAlias.contains(mode));
-            } else if ("I".equals(columnName) && tableName.equals("")) {
-                assertTrue(mode + " mode should support columnAlias",
-                        columnAlias.indexOf(mode) < 0);
+            String schemaName = meta.getSchemaName(1);
+            if (columnAlias.contains(mode)) {
+                assertEquals(mode + " mode", "ID", columnName);
+                assertEquals(mode + " mode", "TEST", tableName);
+                assertEquals(mode + " mode", "PUBLIC", schemaName);
             } else {
-                fail();
+                assertEquals(mode + " mode", "I", columnName);
+                assertEquals(mode + " mode", "", tableName);
+                assertEquals(mode + " mode", "", schemaName);
             }
         }
         stat.execute("DROP TABLE TEST");
@@ -211,13 +218,6 @@ public class TestCompatibility extends TestDb {
         stat.execute("CALL SYSDATE");
         stat.execute("CALL TODAY");
 
-        stat.execute("DROP TABLE TEST IF EXISTS");
-        stat.execute("CREATE TABLE TEST(ID INT)");
-        stat.execute("INSERT INTO TEST VALUES(1)");
-        PreparedStatement prep = conn.prepareStatement(
-                "SELECT LIMIT ? 1 ID FROM TEST");
-        prep.setInt(1, 2);
-        prep.executeQuery();
         stat.execute("DROP TABLE TEST IF EXISTS");
     }
 
@@ -276,12 +276,7 @@ public class TestCompatibility extends TestDb {
         String[] DISALLOWED_TYPES = {"NUMBER", "IDENTITY", "TINYINT", "BLOB"};
         for (String type : DISALLOWED_TYPES) {
             stat.execute("DROP TABLE IF EXISTS TEST");
-            try {
-                stat.execute("CREATE TABLE TEST(COL " + type + ")");
-                fail("Expect type " + type + " to not exist in PostgreSQL mode");
-            } catch (SQLException e) {
-                /* Expected! */
-            }
+            assertThrows(ErrorCode.UNKNOWN_DATA_TYPE_1, stat).execute("CREATE TABLE TEST(COL " + type + ")");
         }
 
         /* Test MONEY data type */
@@ -328,6 +323,7 @@ public class TestCompatibility extends TestDb {
         stat.execute("DROP TABLE IF EXISTS TEST");
         stat.execute("CREATE TABLE `TEST`(ID INT PRIMARY KEY, NAME VARCHAR)");
         stat.execute("INSERT INTO TEST VALUES(1, 'Hello'), (2, 'World')");
+        assertResult(null, stat, "SELECT UNIX_TIMESTAMP(NULL)");
         assertResult("0", stat, "SELECT UNIX_TIMESTAMP('1970-01-01 00:00:00Z')");
         assertResult("1196418619", stat, "SELECT UNIX_TIMESTAMP('2007-11-30 10:30:19Z')");
         assertResult("1196418619", stat, "SELECT UNIX_TIMESTAMP(FROM_UNIXTIME(1196418619))");
@@ -368,105 +364,106 @@ public class TestCompatibility extends TestDb {
         testMySQLBytesCheck(prep.executeQuery(), string, bytes);
         stat.execute("DROP TABLE TEST2");
 
-        if (config.memory) {
-            return;
+        if (!config.memory) {
+            // need to reconnect, because meta data tables may be initialized
+            conn.close();
+            conn = getConnection("compatibility;MODE=MYSQL;DATABASE_TO_LOWER=TRUE");
+            stat = conn.createStatement();
+            testLog(Math.log(10), stat);
+
+            DatabaseMetaData meta = conn.getMetaData();
+            assertTrue(meta.storesLowerCaseIdentifiers());
+            assertFalse(meta.storesLowerCaseQuotedIdentifiers());
+            assertFalse(meta.storesMixedCaseIdentifiers());
+            assertFalse(meta.storesMixedCaseQuotedIdentifiers());
+            assertFalse(meta.storesUpperCaseIdentifiers());
+            assertFalse(meta.storesUpperCaseQuotedIdentifiers());
+
+            stat = conn.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE,
+                    ResultSet.CONCUR_UPDATABLE);
+            assertResult("test", stat, "SHOW TABLES");
+            rs = stat.executeQuery("SELECT * FROM TEST");
+            rs.next();
+            rs.updateString(2, "Hallo");
+            rs.updateRow();
+
+            // we used to have an NullPointerException in the MetaTable.checkIndex()
+            // method
+            rs = stat.executeQuery("SELECT * FROM " +
+                    "INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME > 'aaaa'");
+            rs = stat.executeQuery("SELECT * FROM " +
+                    "INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME < 'aaaa'");
+
+            stat.execute("CREATE TABLE TEST_1" +
+                    "(ID INT PRIMARY KEY) ENGINE=InnoDb");
+            stat.execute("CREATE TABLE TEST_2" +
+                    "(ID INT PRIMARY KEY) ENGINE=MyISAM");
+            stat.execute("CREATE TABLE TEST_3" +
+                    "(ID INT PRIMARY KEY) ENGINE=InnoDb charset=UTF8");
+            stat.execute("CREATE TABLE TEST_4" +
+                    "(ID INT PRIMARY KEY) charset=UTF8");
+            stat.execute("CREATE TABLE TEST_5" +
+                    "(ID INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDb auto_increment=3 default charset=UTF8");
+            stat.execute("CREATE TABLE TEST_6" +
+                    "(ID INT AUTO_INCREMENT PRIMARY KEY) " +
+                    "ENGINE=MyISAM default character set UTF8MB4, auto_increment 3");
+            stat.execute("CREATE TABLE TEST_7" +
+                    "(ID INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDb auto_increment=3 charset=UTF8 comment 'text'");
+            stat.execute("CREATE TABLE TEST_8" +
+                    "(ID INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDb auto_increment=3 character set=UTF8");
+            stat.execute("CREATE TABLE TEST_9" +
+                    "(ID INT, KEY TEST_7_IDX(ID) USING BTREE)");
+            stat.execute("CREATE TABLE TEST_10" +
+                    "(ID INT, UNIQUE KEY TEST_10_IDX(ID) USING BTREE)");
+            stat.execute("CREATE TABLE TEST_11(ID INT) COLLATE UTF8");
+            stat.execute("CREATE TABLE TEST_12(ID INT) DEFAULT COLLATE UTF8");
+            stat.execute("CREATE TABLE TEST_13(a VARCHAR(10) COLLATE UTF8MB4)");
+            stat.execute("CREATE TABLE TEST_14(a VARCHAR(10) NULL CHARACTER SET UTF8MB4 COLLATE UTF8MB4_BIN)");
+            stat.execute("ALTER TABLE TEST_14 CONVERT TO CHARACTER SET UTF8MB4 COLLATE UTF8MB4_UNICODE_CI");
+            stat.execute("ALTER TABLE TEST_14 MODIFY a VARCHAR(10) NOT NULL CHARACTER SET UTF8MB4 COLLATE UTF8");
+            assertThrows(ErrorCode.SYNTAX_ERROR_1, stat).execute("CREATE TABLE TEST_99" +
+                    "(ID INT PRIMARY KEY) CHARSET UTF8,");
+            assertThrows(ErrorCode.COLUMN_NOT_FOUND_1, stat).execute("CREATE TABLE TEST_99" +
+                    "(ID INT PRIMARY KEY) AUTO_INCREMENT 100");
+            assertThrows(ErrorCode.COLUMN_NOT_FOUND_1, stat).execute("CREATE TABLE TEST_99" +
+                    "(ID INT) AUTO_INCREMENT 100");
+
+            // this maps to SET REFERENTIAL_INTEGRITY TRUE/FALSE
+            stat.execute("SET foreign_key_checks = 0");
+            stat.execute("SET foreign_key_checks = 1");
+
+            // Check if mysql comments are supported, ensure clean connection
+            conn.close();
+            conn = getConnection("compatibility;MODE=MYSQL;DATABASE_TO_LOWER=TRUE");
+            stat = conn.createStatement();
+            stat.execute("DROP TABLE IF EXISTS TEST_NO_COMMENT");
+            stat.execute("CREATE table TEST_NO_COMMENT " +
+                    "(ID bigint not null auto_increment, " +
+                    "SOME_STR varchar(255), primary key (ID))");
+            // now test creating a table with a comment
+            stat.execute("DROP TABLE IF EXISTS TEST_COMMENT");
+            stat.execute("create table TEST_COMMENT (ID bigint not null auto_increment, " +
+                    "SOME_STR varchar(255), primary key (ID)) comment='Some comment.'");
+            // now test creating a table with a comment and engine
+            // and other typical mysql stuff as generated by hibernate
+            stat.execute("DROP TABLE IF EXISTS TEST_COMMENT_ENGINE");
+            stat.execute("create table TEST_COMMENT_ENGINE " +
+                    "(ID bigint not null auto_increment, " +
+                    "ATTACHMENT_ID varchar(255), " +
+                    "SOME_ITEM_ID bigint not null, primary key (ID), " +
+                    "unique (ATTACHMENT_ID, SOME_ITEM_ID)) " +
+                    "comment='Comment Again' ENGINE=InnoDB");
+
+            stat.execute("CREATE TABLE TEST2(ID INT) ROW_FORMAT=DYNAMIC");
+
+            // check the MySQL index dropping syntax
+            stat.execute("ALTER TABLE TEST_COMMENT_ENGINE ADD CONSTRAINT CommentUnique UNIQUE (SOME_ITEM_ID)");
+            stat.execute("ALTER TABLE TEST_COMMENT_ENGINE DROP INDEX CommentUnique");
+            stat.execute("CREATE INDEX IDX_ATTACHMENT_ID ON TEST_COMMENT_ENGINE (ATTACHMENT_ID)");
+            stat.execute("DROP INDEX IDX_ATTACHMENT_ID ON TEST_COMMENT_ENGINE");
+
+            stat.execute("DROP ALL OBJECTS");
         }
-        // need to reconnect, because meta data tables may be initialized
-        conn.close();
-        conn = getConnection("compatibility;MODE=MYSQL;DATABASE_TO_LOWER=TRUE");
-        stat = conn.createStatement();
-        testLog(Math.log(10), stat);
-
-        DatabaseMetaData meta = conn.getMetaData();
-        assertTrue(meta.storesLowerCaseIdentifiers());
-        assertFalse(meta.storesLowerCaseQuotedIdentifiers());
-        assertFalse(meta.storesMixedCaseIdentifiers());
-        assertFalse(meta.storesMixedCaseQuotedIdentifiers());
-        assertFalse(meta.storesUpperCaseIdentifiers());
-        assertFalse(meta.storesUpperCaseQuotedIdentifiers());
-
-        stat = conn.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE,
-                ResultSet.CONCUR_UPDATABLE);
-        assertResult("test", stat, "SHOW TABLES");
-        rs = stat.executeQuery("SELECT * FROM TEST");
-        rs.next();
-        rs.updateString(2, "Hallo");
-        rs.updateRow();
-
-        // we used to have an NullPointerException in the MetaTable.checkIndex()
-        // method
-        rs = stat.executeQuery("SELECT * FROM " +
-                "INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME > 'aaaa'");
-        rs = stat.executeQuery("SELECT * FROM " +
-                "INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME < 'aaaa'");
-
-        stat.execute("CREATE TABLE TEST_1" +
-                "(ID INT PRIMARY KEY) ENGINE=InnoDb");
-        stat.execute("CREATE TABLE TEST_2" +
-                "(ID INT PRIMARY KEY) ENGINE=MyISAM");
-        stat.execute("CREATE TABLE TEST_3" +
-                "(ID INT PRIMARY KEY) ENGINE=InnoDb charset=UTF8");
-        stat.execute("CREATE TABLE TEST_4" +
-                "(ID INT PRIMARY KEY) charset=UTF8");
-        stat.execute("CREATE TABLE TEST_5" +
-                "(ID INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDb auto_increment=3 default charset=UTF8");
-        stat.execute("CREATE TABLE TEST_6" +
-                "(ID INT AUTO_INCREMENT PRIMARY KEY) ENGINE=MyISAM default character set UTF8MB4, auto_increment 3");
-        stat.execute("CREATE TABLE TEST_7" +
-                "(ID INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDb auto_increment=3 charset=UTF8 comment 'text'");
-        stat.execute("CREATE TABLE TEST_8" +
-                "(ID INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDb auto_increment=3 character set=UTF8");
-        stat.execute("CREATE TABLE TEST_9" +
-                "(ID INT, KEY TEST_7_IDX(ID) USING BTREE)");
-        stat.execute("CREATE TABLE TEST_10" +
-                "(ID INT, UNIQUE KEY TEST_10_IDX(ID) USING BTREE)");
-        stat.execute("CREATE TABLE TEST_11(ID INT) COLLATE UTF8");
-        stat.execute("CREATE TABLE TEST_12(ID INT) DEFAULT COLLATE UTF8");
-        stat.execute("CREATE TABLE TEST_13(a VARCHAR(10) COLLATE UTF8MB4)");
-        stat.execute("CREATE TABLE TEST_14(a VARCHAR(10) NULL CHARACTER SET UTF8MB4 COLLATE UTF8MB4_BIN)");
-        stat.execute("ALTER TABLE TEST_14 MODIFY a VARCHAR(10) NOT NULL CHARACTER SET UTF8MB4 COLLATE UTF8");
-        assertThrows(ErrorCode.SYNTAX_ERROR_2, stat).execute("CREATE TABLE TEST_99" +
-                "(ID INT PRIMARY KEY) CHARSET UTF8,");
-        assertThrows(ErrorCode.COLUMN_NOT_FOUND_1, stat).execute("CREATE TABLE TEST_99" +
-                "(ID INT PRIMARY KEY) AUTO_INCREMENT 100");
-        assertThrows(ErrorCode.COLUMN_NOT_FOUND_1, stat).execute("CREATE TABLE TEST_99" +
-                "(ID INT) AUTO_INCREMENT 100");
-
-        // this maps to SET REFERENTIAL_INTEGRITY TRUE/FALSE
-        stat.execute("SET foreign_key_checks = 0");
-        stat.execute("SET foreign_key_checks = 1");
-
-        // Check if mysql comments are supported, ensure clean connection
-        conn.close();
-        conn = getConnection("compatibility;MODE=MYSQL;DATABASE_TO_LOWER=TRUE");
-        stat = conn.createStatement();
-        stat.execute("DROP TABLE IF EXISTS TEST_NO_COMMENT");
-        stat.execute("CREATE table TEST_NO_COMMENT " +
-                "(ID bigint not null auto_increment, " +
-                "SOME_STR varchar(255), primary key (ID))");
-        // now test creating a table with a comment
-        stat.execute("DROP TABLE IF EXISTS TEST_COMMENT");
-        stat.execute("create table TEST_COMMENT (ID bigint not null auto_increment, " +
-                "SOME_STR varchar(255), primary key (ID)) comment='Some comment.'");
-        // now test creating a table with a comment and engine
-        // and other typical mysql stuff as generated by hibernate
-        stat.execute("DROP TABLE IF EXISTS TEST_COMMENT_ENGINE");
-        stat.execute("create table TEST_COMMENT_ENGINE " +
-                "(ID bigint not null auto_increment, " +
-                "ATTACHMENT_ID varchar(255), " +
-                "SOME_ITEM_ID bigint not null, primary key (ID), " +
-                "unique (ATTACHMENT_ID, SOME_ITEM_ID)) " +
-                "comment='Comment Again' ENGINE=InnoDB");
-
-        stat.execute("CREATE TABLE TEST2(ID INT) ROW_FORMAT=DYNAMIC");
-
-        // check the MySQL index dropping syntax
-        stat.execute("ALTER TABLE TEST_COMMENT_ENGINE ADD CONSTRAINT CommentUnique UNIQUE (SOME_ITEM_ID)");
-        stat.execute("ALTER TABLE TEST_COMMENT_ENGINE DROP INDEX CommentUnique");
-        stat.execute("CREATE INDEX IDX_ATTACHMENT_ID ON TEST_COMMENT_ENGINE (ATTACHMENT_ID)");
-        stat.execute("DROP INDEX IDX_ATTACHMENT_ID ON TEST_COMMENT_ENGINE");
-
-        stat.execute("DROP ALL OBJECTS");
 
         conn.close();
         deleteDb("compatibility");
@@ -482,6 +479,49 @@ public class TestCompatibility extends TestDb {
         assertEquals(string, rs.getString(1));
         assertEquals(bytes, rs.getBytes(1));
         assertEquals(bytes, rs.getBytes("C"));
+    }
+
+    private void testConcurrentAutoIncrement() throws SQLException {
+        int nThreads = 50;
+        Thread[] threads = new Thread[nThreads];
+        AtomicReference<SQLException> ref = new AtomicReference<>();
+        Statement stat = conn.createStatement();
+        stat.execute("SET MODE MySQL;");
+        stat.execute("CREATE TABLE TEST(ID INT AUTO_INCREMENT PRIMARY KEY, V INT)");
+        try {
+            for (int i = 0; i < nThreads; i++) {
+                threads[i] = new Thread(() -> {
+                    try (Connection c = getConnection("compatibility;MODE=MYSQL")) {
+                        PreparedStatement ps = c.prepareStatement("INSERT INTO TEST(V) VALUES (?)");
+                        for (int j = 0; j < 1000 && ref.get() == null; j++) {
+                            ps.setInt(1, j);
+                            ps.executeUpdate();
+                        }
+                    } catch (SQLException e) {
+                        ref.compareAndSet(null, e);
+                    }
+                });
+            }
+            for (int i = 0; i < nThreads; i++) {
+                threads[i].start();
+            }
+        } finally {
+            for (int i = 0; i < nThreads; i++) {
+                Thread t = threads[i];
+                if (t != null) {
+                    try {
+                        t.join();
+                    } catch (Exception ignore) {
+                        //
+                    }
+                }
+            }
+            stat.execute("DROP TABLE TEST");
+            SQLException e = ref.get();
+            if (e != null) {
+                throw e;
+            }
+        }
     }
 
     private void testSybaseAndMSSQLServer() throws SQLException {
@@ -742,19 +782,15 @@ public class TestCompatibility extends TestDb {
                 assertEquals(2, rs.getInt(2));
             }
         } else {
-            assertThrows(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, stat).executeQuery(query);
+            assertThrows(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_WITH_CANDIDATES_2, stat).executeQuery(query);
         }
     }
 
     private void testUnknownURL() {
-        try {
+        assertThrows(ErrorCode.UNKNOWN_MODE_1, () -> {
             getConnection("compatibility;MODE=Unknown").close();
             deleteDb("compatibility");
-        } catch (SQLException ex) {
-            assertEquals(ErrorCode.UNKNOWN_MODE_1, ex.getErrorCode());
-            return;
-        }
-        fail();
+        });
     }
 
     private void testIdentifiersCaseInResultSet() throws SQLException {
@@ -768,6 +804,29 @@ public class TestCompatibility extends TestDb {
             rs = stat.executeQuery("SELECT a FROM (SELECT 1) t(A)");
             md = rs.getMetaData();
             assertEquals("A", md.getColumnName(1));
+        } finally {
+            deleteDb("compatibility");
+        }
+    }
+
+    private void testDatabaseToLowerParser() throws SQLException {
+        try (Connection conn = getConnection("compatibility;DATABASE_TO_LOWER=TRUE")) {
+            Statement stat = conn.createStatement();
+            ResultSet rs = stat.executeQuery("SELECT 0x1234567890AbCdEf");
+            rs.next();
+            assertEquals(0x1234567890ABCDEFL, rs.getLong(1));
+        } finally {
+            deleteDb("compatibility");
+        }
+    }
+
+    private void testOldInformationSchema() throws SQLException {
+        try (Connection conn = getConnection(
+                "compatibility;OLD_INFORMATION_SCHEMA=TRUE")) {
+            Statement stat = conn.createStatement();
+            ResultSet rs = stat.executeQuery("TABLE INFORMATION_SCHEMA.TABLE_TYPES");
+            rs.next();
+            assertEquals("TABLE", rs.getString(1));
         } finally {
             deleteDb("compatibility");
         }

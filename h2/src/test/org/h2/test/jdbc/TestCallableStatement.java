@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -68,18 +68,16 @@ public class TestCallableStatement extends TestDb {
     }
 
     private void testOutParameter(Connection conn) throws SQLException {
-        conn.createStatement().execute(
-                "create table test(id identity) as select null");
+        conn.createStatement().execute("CREATE SEQUENCE SEQ");
         for (int i = 1; i < 20; i++) {
-            CallableStatement cs = conn.prepareCall("{ ? = call IDENTITY()}");
+            CallableStatement cs = conn.prepareCall("{ ? = CALL NEXT VALUE FOR SEQ}");
             cs.registerOutParameter(1, Types.BIGINT);
             cs.execute();
             long id = cs.getLong(1);
-            assertEquals(1, id);
+            assertEquals(i, id);
             cs.close();
         }
-        conn.createStatement().execute(
-                "drop table test");
+        conn.createStatement().execute("DROP SEQUENCE SEQ");
     }
 
     private void testUnsupportedOperations(Connection conn) throws SQLException {
@@ -240,9 +238,8 @@ public class TestCallableStatement extends TestDb {
         assertEquals(1, rs.getInt(1));
         assertEquals("Hello", rs.getString(2));
         assertFalse(rs.next());
-        stat.execute("CREATE ALIAS testCall FOR \"" +
-                    getClass().getName() + ".testCall\"");
-        call = conn.prepareCall("{CALL testCall(?, ?, ?, ?)}");
+        stat.execute("CREATE ALIAS testCall FOR '" + getClass().getName() + ".testCall'");
+        call = conn.prepareCall("{SELECT * FROM testCall(?, ?, ?, ?)}");
         call.setInt("A", 50);
         call.setString("B", "abc");
         long t = System.currentTimeMillis();
@@ -251,12 +248,7 @@ public class TestCallableStatement extends TestDb {
         call.registerOutParameter(1, Types.INTEGER);
         call.registerOutParameter("B", Types.VARCHAR);
         call.executeUpdate();
-        try {
-            call.getTimestamp("C");
-            fail("not registered out parameter accessible");
-        } catch (SQLException e) {
-            // expected exception
-        }
+        assertThrows(ErrorCode.INVALID_VALUE_2, call).getTimestamp("C");
         call.registerOutParameter(3, Types.TIMESTAMP);
         call.registerOutParameter(4, Types.TIMESTAMP);
         call.executeUpdate();
@@ -309,24 +301,9 @@ public class TestCallableStatement extends TestDb {
         assertEquals("ABC", call.getSQLXML(2).getString());
         assertEquals("ABC", call.getSQLXML("B").getString());
 
-        try {
-            call.getString(100);
-            fail("incorrect parameter index value");
-        } catch (SQLException e) {
-            // expected exception
-        }
-        try {
-            call.getString(0);
-            fail("incorrect parameter index value");
-        } catch (SQLException e) {
-            // expected exception
-        }
-        try {
-            call.getBoolean("X");
-            fail("incorrect parameter name value");
-        } catch (SQLException e) {
-            // expected exception
-        }
+        assertThrows(ErrorCode.INVALID_VALUE_2, call).getString(100);
+        assertThrows(ErrorCode.INVALID_VALUE_2, call).getString(0);
+        assertThrows(ErrorCode.INVALID_VALUE_2, call).getBoolean("X");
 
         call.setCharacterStream("B",
                 new StringReader("xyz"));
@@ -394,7 +371,7 @@ public class TestCallableStatement extends TestDb {
         JdbcUtils.addClassFactory(myFactory);
         try {
             Statement stat = conn.createStatement();
-            stat.execute("CREATE ALIAS T_CLASSLOADER FOR \"TestClassFactory.testClassF\"");
+            stat.execute("CREATE ALIAS T_CLASSLOADER FOR 'TestClassFactory.testClassF'");
             ResultSet rs = stat.executeQuery("SELECT T_CLASSLOADER(true)");
             assertTrue(rs.next());
             assertEquals(false, rs.getBoolean(1));
@@ -406,8 +383,7 @@ public class TestCallableStatement extends TestDb {
     private void testArrayArgument(Connection connection) throws SQLException {
         Array array = connection.createArrayOf("Int", new Object[] {0, 1, 2});
         try (Statement statement = connection.createStatement()) {
-            statement.execute("CREATE ALIAS getArrayLength FOR \"" +
-                            getClass().getName() + ".getArrayLength\"");
+            statement.execute("CREATE ALIAS getArrayLength FOR '" + getClass().getName() + ".getArrayLength'");
 
             // test setArray
             try (CallableStatement callableStatement = connection
@@ -446,8 +422,7 @@ public class TestCallableStatement extends TestDb {
             {0, null, 2},
         };
         try (Statement statement = connection.createStatement()) {
-            statement.execute("CREATE ALIAS arrayIdentiy FOR \"" +
-                            getClass().getName() + ".arrayIdentiy\"");
+            statement.execute("CREATE ALIAS arrayIdentiy FOR '" + getClass().getName() + ".arrayIdentiy'");
 
             for (Integer[] arrayToTest : arraysToTest) {
                 Array sqlInputArray = connection.createArrayOf("INTEGER", arrayToTest);

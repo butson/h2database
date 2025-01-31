@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -145,12 +145,13 @@ public class FreeSpaceBitSet {
             int freeBlocks = end - start;
             if (end < 0 || freeBlocks >= blocks) {
                 if ((reservedHigh < 0 || start < reservedHigh) && start + blocks > reservedLow) { // overlap detected
-                    if (reservedHigh < 0) {
-                        start = getAfterLastBlock();
-                        end = -1;
-                    } else {
+                    if (reservedHigh >= 0) {
+                        freeBlocksTotal += freeBlocks;
                         i = reservedHigh;
                         continue;
+                    } else {
+                        assert end < 0 : end;
+                        assert start == getAfterLastBlock() : start + " <> " + getAfterLastBlock();
                     }
                 }
                 assert set.nextSetBit(start) == -1 || set.nextSetBit(start) >= start + blocks :
@@ -222,36 +223,9 @@ public class FreeSpaceBitSet {
      * @return the fill rate (0 - 100)
      */
     int getFillRate() {
-        return getProjectedFillRate(0);
-    }
-
-    /**
-     * Calculates a prospective fill rate, which store would have after rewrite
-     * of sparsely populated chunk(s) and evacuation of still live data into a
-     * new chunk.
-     *
-     * @param vacatedBlocks
-     *            number of blocks vacated  as a result of live data evacuation less
-     *            number of blocks in prospective chunk with evacuated live data
-     * @return prospective fill rate (0 - 100)
-     */
-    int getProjectedFillRate(int vacatedBlocks) {
-        // it's not bullet-proof against race condition but should be good enough
-        // to get approximation without holding a store lock
-        int usedBlocks;
-        int totalBlocks;
-        // to prevent infinite loop, which I saw once
-        int cnt = 3;
-        do {
-            if (--cnt == 0) {
-                return 100;
-            }
-            totalBlocks = set.length();
-            usedBlocks = set.cardinality();
-        } while (totalBlocks != set.length() || usedBlocks > totalBlocks);
-        usedBlocks -= firstFreeBlock + vacatedBlocks;
-        totalBlocks -= firstFreeBlock;
-        return usedBlocks == 0 ? 0 : (int)((100L * usedBlocks + totalBlocks - 1) / totalBlocks);
+        int usedBlocks = set.cardinality() - firstFreeBlock;
+        int totalBlocks = set.length() - firstFreeBlock;
+        return totalBlocks == 0 ? 0 : (int)((100L * usedBlocks + totalBlocks - 1) / totalBlocks);
     }
 
     /**

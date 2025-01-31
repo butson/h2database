@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -25,9 +25,13 @@ import java.security.SecureClassLoader;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Predicate;
 
+import javax.script.Bindings;
 import javax.script.Compilable;
 import javax.script.CompiledScript;
+import javax.script.ScriptContext;
+import javax.script.ScriptEngine;
 import javax.script.ScriptEngineManager;
 import javax.script.ScriptException;
 import javax.tools.FileObject;
@@ -124,6 +128,7 @@ public class SourceCompiler {
      *
      * @param packageAndClassName the class name
      * @return the class
+     * @throws ClassNotFoundException on failure
      */
     public Class<?> getClass(String packageAndClassName)
             throws ClassNotFoundException {
@@ -201,6 +206,7 @@ public class SourceCompiler {
      *
      * @param packageAndClassName the package and class name
      * @return the compiled script
+     * @throws ScriptException on failure
      */
     public CompiledScript getCompiledScript(String packageAndClassName) throws ScriptException {
         CompiledScript compiledScript = compiledScripts.get(packageAndClassName);
@@ -215,8 +221,13 @@ public class SourceCompiler {
                 throw new IllegalStateException("Unknown language for " + source);
             }
 
-            final Compilable jsEngine = (Compilable) new ScriptEngineManager().getEngineByName(lang);
-            compiledScript = jsEngine.compile(source);
+            final ScriptEngine jsEngine = new ScriptEngineManager().getEngineByName(lang);
+            if (jsEngine.getClass().getName().equals("com.oracle.truffle.js.scriptengine.GraalJSScriptEngine")) {
+                Bindings bindings = jsEngine.getBindings(ScriptContext.ENGINE_SCOPE);
+                bindings.put("polyglot.js.allowHostAccess", true);
+                bindings.put("polyglot.js.allowHostClassLookup", (Predicate<String>) s -> true);
+            }
+            compiledScript = ((Compilable) jsEngine).compile(source);
             compiledScripts.put(packageAndClassName, compiledScript);
         }
         return compiledScript;
@@ -227,6 +238,7 @@ public class SourceCompiler {
      *
      * @param className the class name
      * @return the method name
+     * @throws ClassNotFoundException on failure
      */
     public Method getMethod(String className) throws ClassNotFoundException {
         Class<?> clazz = getClass(className);
@@ -376,7 +388,7 @@ public class SourceCompiler {
             copyInThread(p.getInputStream(), buff);
             copyInThread(p.getErrorStream(), buff);
             p.waitFor();
-            String output = new String(buff.toByteArray(), StandardCharsets.UTF_8);
+            String output = buff.toString(StandardCharsets.UTF_8);
             handleSyntaxError(output, p.exitValue());
             return p.exitValue();
         } catch (Exception e) {
@@ -396,9 +408,8 @@ public class SourceCompiler {
     private static synchronized void javacSun(Path javaFile) {
         PrintStream old = System.err;
         ByteArrayOutputStream buff = new ByteArrayOutputStream();
-        PrintStream temp = new PrintStream(buff);
         try {
-            System.setErr(temp);
+            System.setErr(new PrintStream(buff, false, "UTF-8"));
             Method compile;
             compile = JAVAC_SUN.getMethod("compile", String[].class);
             Object javac = JAVAC_SUN.getDeclaredConstructor().newInstance();
@@ -411,7 +422,7 @@ public class SourceCompiler {
                     "-d", COMPILE_DIR,
                     "-encoding", "UTF-8",
                     javaFile.toAbsolutePath().toString() });
-            String output = new String(buff.toByteArray(), StandardCharsets.UTF_8);
+            String output = buff.toString(StandardCharsets.UTF_8);
             handleSyntaxError(output, status);
         } catch (Exception e) {
             throw DbException.convert(e);
@@ -567,9 +578,9 @@ public class SourceCompiler {
          * We use map because there can be nested, anonymous etc classes.
          */
         Map<String, JavaClassObject> classObjectsByName = new HashMap<>();
-        
+
         private SecureClassLoader classLoader = new SecureClassLoader() {
-            
+
             @Override
             protected Class<?> findClass(String name)
                     throws ClassNotFoundException {

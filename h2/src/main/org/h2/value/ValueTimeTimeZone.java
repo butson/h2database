@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,7 +9,6 @@ import org.h2.api.ErrorCode;
 import org.h2.engine.CastDataProvider;
 import org.h2.message.DbException;
 import org.h2.util.DateTimeUtils;
-import org.h2.util.JSR310Utils;
 
 /**
  * Implementation of the TIME WITH TIME ZONE data type.
@@ -59,9 +58,8 @@ public final class ValueTimeTimeZone extends Value {
      */
     public static ValueTimeTimeZone fromNanos(long nanos, int timeZoneOffsetSeconds) {
         if (nanos < 0L || nanos >= DateTimeUtils.NANOS_PER_DAY) {
-            StringBuilder builder = new StringBuilder();
-            DateTimeUtils.appendTime(builder, nanos);
-            throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2, "TIME WITH TIME ZONE", builder.toString());
+            throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2, "TIME WITH TIME ZONE",
+                    DateTimeUtils.appendTime(new StringBuilder(), nanos).toString());
         }
         /*
          * Some current and historic time zones have offsets larger than 12
@@ -79,11 +77,14 @@ public final class ValueTimeTimeZone extends Value {
      *
      * @param s
      *            the string to parse
+     * @param provider
+     *            the cast information provider, may be {@code null} for
+     *            literals with time zone
      * @return the time
      */
-    public static ValueTimeTimeZone parse(String s) {
+    public static ValueTimeTimeZone parse(String s, CastDataProvider provider) {
         try {
-            return DateTimeUtils.parseTimeWithTimeZone(s, null);
+            return (ValueTimeTimeZone) DateTimeUtils.parseTime(s, provider, true);
         } catch (Exception e) {
             throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2, e, "TIME WITH TIME ZONE", s);
         }
@@ -131,9 +132,7 @@ public final class ValueTimeTimeZone extends Value {
     }
 
     private StringBuilder toString(StringBuilder builder) {
-        DateTimeUtils.appendTime(builder, nanos);
-        DateTimeUtils.appendTimeZone(builder, timeZoneOffsetSeconds);
-        return builder;
+        return DateTimeUtils.appendTimeZone(DateTimeUtils.appendTime(builder, nanos), timeZoneOffsetSeconds);
     }
 
     @Override
@@ -157,11 +156,6 @@ public final class ValueTimeTimeZone extends Value {
     @Override
     public int hashCode() {
         return (int) (nanos ^ (nanos >>> 32) ^ timeZoneOffsetSeconds);
-    }
-
-    @Override
-    public Object getObject() {
-        return JSR310Utils.valueToOffsetTime(this, null);
     }
 
 }

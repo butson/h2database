@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -25,7 +25,7 @@ SELECT SELECTIVITY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TEST' AND
 >> 80
 
 TRUNCATE TABLE TEST;
-> ok
+> update count: 10
 
 INSERT INTO TEST(X) VALUES 1, 2, 3;
 > update count: 3
@@ -37,7 +37,7 @@ SELECT SELECTIVITY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TEST' AND
 >> 100
 
 TRUNCATE TABLE TEST;
-> ok
+> update count: 3
 
 INSERT INTO TEST(X) VALUES 1, 1, 1, 1;
 > update count: 4
@@ -55,7 +55,7 @@ SELECT SELECTIVITY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TEST' AND
 >> 33
 
 TRUNCATE TABLE TEST;
-> ok
+> update count: 4
 
 ANALYZE TABLE TEST;
 > ok

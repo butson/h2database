@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,12 +8,10 @@ package org.h2.mode;
 import java.util.HashMap;
 
 import org.h2.api.ErrorCode;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ValueExpression;
-import org.h2.expression.function.DateTimeFunctions;
-import org.h2.expression.function.Function;
-import org.h2.expression.function.FunctionInfo;
+import org.h2.expression.function.DateTimeFunction;
 import org.h2.message.DbException;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
@@ -23,7 +21,7 @@ import org.h2.value.ValueUuid;
 /**
  * Functions for {@link org.h2.engine.Mode.ModeEnum#Oracle} compatibility mode.
  */
-public final class FunctionsOracle extends FunctionsBase {
+public final class FunctionsOracle extends ModeFunction {
 
     private static final int ADD_MONTHS = 2001;
 
@@ -38,16 +36,13 @@ public final class FunctionsOracle extends FunctionsBase {
     private static final HashMap<String, FunctionInfo> FUNCTIONS = new HashMap<>();
 
     static {
-        FUNCTIONS.put("ADD_MONTHS",
-                new FunctionInfo("ADD_MONTHS", ADD_MONTHS, 2, Value.TIMESTAMP, true, true, true, false));
-        FUNCTIONS.put("SYS_GUID",
-                new FunctionInfo("SYS_GUID", SYS_GUID, 0, Value.VARBINARY, false, false, true, false));
-        FUNCTIONS.put("TO_DATE",
-                new FunctionInfo("TO_DATE", TO_DATE, VAR_ARGS, Value.TIMESTAMP, true, true, true, false));
+        FUNCTIONS.put("ADD_MONTHS", new FunctionInfo("ADD_MONTHS", ADD_MONTHS, 2, Value.TIMESTAMP, true, true));
+        FUNCTIONS.put("SYS_GUID", new FunctionInfo("SYS_GUID", SYS_GUID, 0, Value.VARBINARY, false, false));
+        FUNCTIONS.put("TO_DATE", new FunctionInfo("TO_DATE", TO_DATE, VAR_ARGS, Value.TIMESTAMP, true, true));
         FUNCTIONS.put("TO_TIMESTAMP",
-                new FunctionInfo("TO_TIMESTAMP", TO_TIMESTAMP, VAR_ARGS, Value.TIMESTAMP, true, true, true, false));
-        FUNCTIONS.put("TO_TIMESTAMP_TZ", new FunctionInfo("TO_TIMESTAMP_TZ", TO_TIMESTAMP_TZ, VAR_ARGS,
-                Value.TIMESTAMP_TZ, true, true, true, false));
+                new FunctionInfo("TO_TIMESTAMP", TO_TIMESTAMP, VAR_ARGS, Value.TIMESTAMP, true, true));
+        FUNCTIONS.put("TO_TIMESTAMP_TZ",
+                new FunctionInfo("TO_TIMESTAMP_TZ", TO_TIMESTAMP_TZ, VAR_ARGS, Value.TIMESTAMP_TZ, true, true));
     }
 
     /**
@@ -57,7 +52,7 @@ public final class FunctionsOracle extends FunctionsBase {
      *            the upper-case name of a function
      * @return the function with specified name or {@code null}
      */
-    public static Function getFunction(String upperName) {
+    public static FunctionsOracle getFunction(String upperName) {
         FunctionInfo info = FUNCTIONS.get(upperName);
         return info != null ? new FunctionsOracle(info) : null;
     }
@@ -80,7 +75,7 @@ public final class FunctionsOracle extends FunctionsBase {
             max = 3;
             break;
         default:
-            throw DbException.throwInternalError("type=" + info.type);
+            throw DbException.getInternalError("type=" + info.type);
         }
         if (len < min || len > max) {
             throw DbException.get(ErrorCode.INVALID_PARAMETER_COUNT_2, info.name, min + ".." + max);
@@ -88,7 +83,7 @@ public final class FunctionsOracle extends FunctionsBase {
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         boolean allConst = optimizeArguments(session);
         switch (info.type) {
         case SYS_GUID:
@@ -104,7 +99,7 @@ public final class FunctionsOracle extends FunctionsBase {
     }
 
     @Override
-    protected Value getValueWithArgs(Session session, Expression[] args) {
+    public Value getValue(SessionLocal session) {
         Value[] values = getArgumentsValues(session, args);
         if (values == null) {
             return ValueNull.INSTANCE;
@@ -114,10 +109,14 @@ public final class FunctionsOracle extends FunctionsBase {
         Value result;
         switch (info.type) {
         case ADD_MONTHS:
-            result = DateTimeFunctions.dateadd(session, DateTimeFunctions.MONTH, v1.getInt(), v0);
+            result = DateTimeFunction.dateadd(session, DateTimeFunction.MONTH, v1.getInt(), v0);
             break;
         case SYS_GUID:
-            result = ValueUuid.getNewRandom().convertTo(TypeInfo.TYPE_VARBINARY);
+            /*
+             * Oracle actually uses version 8 (vendor-specific). Standard
+             * version 7 is more similar to it than default 4.
+             */
+            result = ValueUuid.getNewRandom(7).convertTo(TypeInfo.TYPE_VARBINARY);
             break;
         case TO_DATE:
             result = ToDateParser.toDate(session, v0.getString(), v1 == null ? null : v1.getString());
@@ -129,7 +128,7 @@ public final class FunctionsOracle extends FunctionsBase {
             result = ToDateParser.toTimestampTz(session, v0.getString(), v1 == null ? null : v1.getString());
             break;
         default:
-            throw DbException.throwInternalError("type=" + info.type);
+            throw DbException.getInternalError("type=" + info.type);
         }
         return result;
     }

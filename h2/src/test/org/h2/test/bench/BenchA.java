@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -55,7 +55,7 @@ public class BenchA implements Bench {
                 "CREATE TABLE ACCOUNTS(AID INT NOT NULL PRIMARY KEY, " +
                 "BID INT, ABALANCE DECIMAL(15,2), FILLER VARCHAR(84))",
                 "CREATE TABLE HISTORY(TID INT, " +
-                "BID INT, AID INT, DELTA DECIMAL(15,2), HTIME DATETIME, " +
+                "BID INT, AID INT, DELTA DECIMAL(15,2), HTIME TIMESTAMP, " +
                 "FILLER VARCHAR(40))" };
 
         for (String sql : create) {
@@ -103,27 +103,16 @@ public class BenchA implements Bench {
         db.commit();
         db.closeConnection();
         db.end();
-
-//        db.start(this, "Open/Close");
-//        db.openConnection();
-//        db.closeConnection();
-//        db.end();
     }
 
     @Override
     public void runTest() throws SQLException {
-
+        database.openConnection();
         database.start(this, "Transactions");
-        database.openConnection();
         processTransactions();
-        database.closeConnection();
         database.end();
-
-        database.openConnection();
-        processTransactions();
         database.logMemory(this, "Memory Usage");
         database.closeConnection();
-
     }
 
     private void processTransactions() throws SQLException {

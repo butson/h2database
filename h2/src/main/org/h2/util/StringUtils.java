@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,10 +9,14 @@ import java.io.ByteArrayOutputStream;
 import java.lang.ref.SoftReference;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.function.IntPredicate;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.SysProperties;
@@ -33,12 +37,11 @@ public class StringUtils {
     // 4 * 1024 * 2 (strings per pair) * 64 * 2 (bytes per char) = 0.5 MB
     private static final int TO_UPPER_CACHE_LENGTH = 2 * 1024;
     private static final int TO_UPPER_CACHE_MAX_ENTRY_LENGTH = 64;
-    private static final String[][] TO_UPPER_CACHE = new String[TO_UPPER_CACHE_LENGTH][];
+    private static final AtomicReferenceArray<String[]> TO_UPPER_CACHE = new AtomicReferenceArray<>(
+            TO_UPPER_CACHE_LENGTH);
 
     static {
-        for (int i = 0; i < HEX_DECODE.length; i++) {
-            HEX_DECODE[i] = -1;
-        }
+        Arrays.fill(HEX_DECODE, -1);
         for (int i = 0; i <= 9; i++) {
             HEX_DECODE[i + '0'] = i;
         }
@@ -85,15 +88,14 @@ public class StringUtils {
             return s.toUpperCase(Locale.ENGLISH);
         }
         int index = s.hashCode() & (TO_UPPER_CACHE_LENGTH - 1);
-        String[] e = TO_UPPER_CACHE[index];
+        String[] e = TO_UPPER_CACHE.get(index);
         if (e != null) {
             if (e[0].equals(s)) {
                 return e[1];
             }
         }
         String s2 = s.toUpperCase(Locale.ENGLISH);
-        e = new String[] { s, s2 };
-        TO_UPPER_CACHE[index] = e;
+        TO_UPPER_CACHE.compareAndSet(index, e, new String[] { s, s2 });
         return s2;
     }
 
@@ -110,7 +112,7 @@ public class StringUtils {
     /**
      * Convert a string to a SQL literal. Null is converted to NULL. The text is
      * enclosed in single quotes. If there are any special characters, the
-     * method STRINGDECODE is used.
+     * Unicode character string literal is used.
      *
      * @param s the text to convert.
      * @return the SQL literal
@@ -123,37 +125,68 @@ public class StringUtils {
     }
 
     /**
-     * Convert a string to a SQL literal. Null is converted to NULL. The text is
-     * enclosed in single quotes. If there are any special characters, the
-     * method STRINGDECODE is used.
+     * Convert a string to a SQL character string literal. Null is converted to
+     * NULL. If there are any special characters, the Unicode character string
+     * literal is used.
      *
      * @param builder
      *            string builder to append result to
-     * @param s the text to convert.
+     * @param s the text to convert
      * @return the specified string builder
      */
     public static StringBuilder quoteStringSQL(StringBuilder builder, String s) {
         if (s == null) {
             return builder.append("NULL");
         }
-        int builderLength = builder.length();
-        int length = s.length();
-        builder.append('\'');
-        for (int i = 0; i < length; i++) {
-            char c = s.charAt(i);
-            if (c == '\'') {
-                builder.append(c);
-            } else if (c < ' ' || c > 127) {
-                // need to start from the beginning because maybe there was a \
-                // that was not quoted
-                builder.setLength(builderLength);
-                builder.append("STRINGDECODE('");
-                javaEncode(s, builder, true);
-                return builder.append("')");
+        return quoteIdentifierOrLiteral(builder, s, '\'');
+    }
+
+    /**
+     * Decodes a Unicode SQL string.
+     *
+     * @param s
+     *            the string to decode
+     * @param uencode
+     *            the code point of UENCODE character, or '\\'
+     * @return the decoded string
+     * @throws DbException
+     *             on format exception
+     */
+    public static String decodeUnicodeStringSQL(String s, int uencode) {
+        int l = s.length();
+        StringBuilder builder = new StringBuilder(l);
+        for (int i = 0; i < l;) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp == uencode) {
+                if (i >= l) {
+                    throw getFormatException(s, i);
+                }
+                cp = s.codePointAt(i);
+                if (cp == uencode) {
+                    i += Character.charCount(cp);
+                } else {
+                    if (i + 4 > l) {
+                        throw getFormatException(s, i);
+                    }
+                    char ch = s.charAt(i);
+                    try {
+                        if (ch == '+') {
+                            if (i + 7 > l) {
+                                throw getFormatException(s, i);
+                            }
+                            cp = Integer.parseUnsignedInt(s.substring(i + 1, i += 7), 16);
+                        } else {
+                            cp = Integer.parseUnsignedInt(s.substring(i, i += 4), 16);
+                        }
+                    } catch (NumberFormatException e) {
+                        throw getFormatException(s, i);
+                    }
+                }
             }
-            builder.append(c);
+            builder.appendCodePoint(cp);
         }
-        return builder.append('\'');
+        return builder.toString();
     }
 
     /**
@@ -312,8 +345,11 @@ public class StringUtils {
                     buff.append('\\');
                     break;
                 case 'u': {
+                    if (i + 4 >= length) {
+                        throw getFormatException(s, i);
+                    }
                     try {
-                        c = (char) (Integer.parseInt(s.substring(i + 1, i + 5), 16));
+                        c = (char) Integer.parseInt(s.substring(i + 1, i + 5), 16);
                     } catch (NumberFormatException e) {
                         throw getFormatException(s, i);
                     }
@@ -322,9 +358,9 @@ public class StringUtils {
                     break;
                 }
                 default:
-                    if (c >= '0' && c <= '9') {
+                    if (c >= '0' && c <= '9' && i + 2 < length) {
                         try {
-                            c = (char) (Integer.parseInt(s.substring(i, i + 3), 8));
+                            c = (char) Integer.parseInt(s.substring(i, i + 3), 8);
                         } catch (NumberFormatException e) {
                             throw getFormatException(s, i);
                         }
@@ -400,19 +436,6 @@ public class StringUtils {
     }
 
     /**
-     * Remove enclosing '(' and ')' if this text is enclosed.
-     *
-     * @param s the potentially enclosed string
-     * @return the string
-     */
-    public static String unEnclose(String s) {
-        if (s.startsWith("(") && s.endsWith(")")) {
-            return s.substring(1, s.length() - 1);
-        }
-        return s;
-    }
-
-    /**
      * Encode the string as a URL.
      *
      * @param s the string to encode
@@ -420,7 +443,7 @@ public class StringUtils {
      */
     public static String urlEncode(String s) {
         try {
-            return URLEncoder.encode(s, "UTF-8");
+            return URLEncoder.encode(s, StandardCharsets.UTF_8);
         } catch (Exception e) {
             // UnsupportedEncodingException
             throw DbException.convert(e);
@@ -518,24 +541,6 @@ public class StringUtils {
             }
         }
         return builder.toString();
-    }
-
-    /**
-     * Join specified strings and add them to the specified string builder.
-     *
-     * @param builder string builder
-     * @param strings strings to join
-     * @param separator separator
-     * @return the specified string builder
-     */
-    public static StringBuilder join(StringBuilder builder, ArrayList<String> strings, String separator) {
-        for (int i = 0, l = strings.size(); i < l; i++) {
-            if (i > 0) {
-                builder.append(separator);
-            }
-            builder.append(strings.get(i));
-        }
-        return builder;
     }
 
     /**
@@ -775,7 +780,7 @@ public class StringUtils {
      * @return the double quoted text
      */
     public static String quoteIdentifier(String s) {
-        return quoteIdentifier(new StringBuilder(s.length() + 2), s).toString();
+        return quoteIdentifierOrLiteral(new StringBuilder(s.length() + 2), s, '"').toString();
     }
 
     /**
@@ -788,15 +793,42 @@ public class StringUtils {
      * @return the specified builder
      */
     public static StringBuilder quoteIdentifier(StringBuilder builder, String s) {
-        builder.append('"');
-        for (int i = 0, length = s.length(); i < length; i++) {
-            char c = s.charAt(i);
-            if (c == '"') {
-                builder.append(c);
+        return quoteIdentifierOrLiteral(builder, s, '"');
+    }
+
+    private static StringBuilder quoteIdentifierOrLiteral(StringBuilder builder, String s, char q) {
+        int builderLength = builder.length();
+        builder.append(q);
+        for (int i = 0, l = s.length(); i < l;) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp < ' ' || cp > 127) {
+                // need to start from the beginning
+                builder.setLength(builderLength);
+                builder.append("U&").append(q);
+                for (i = 0; i < l;) {
+                    cp = s.codePointAt(i);
+                    i += Character.charCount(cp);
+                    if (cp >= ' ' && cp < 127) {
+                        char ch = (char) cp;
+                        if (ch == q || ch == '\\') {
+                            builder.append(ch);
+                        }
+                        builder.append(ch);
+                    } else if (cp <= 0xffff) {
+                        appendHex(builder.append('\\'), cp, 2);
+                    } else {
+                        appendHex(builder.append("\\+"), cp, 3);
+                    }
+                }
+                break;
             }
-            builder.append(c);
+            if (cp == q) {
+                builder.append(q);
+            }
+            builder.append((char) cp);
         }
-        return builder.append('"');
+        return builder.append(q);
     }
 
     /**
@@ -827,19 +859,22 @@ public class StringUtils {
         } else if (n == string.length()) {
             return string;
         }
-        char paddingChar;
+        int paddingChar;
         if (padding == null || padding.isEmpty()) {
             paddingChar = ' ';
         } else {
-            paddingChar = padding.charAt(0);
+            paddingChar = padding.codePointAt(0);
         }
         StringBuilder buff = new StringBuilder(n);
         n -= string.length();
+        if (Character.isSupplementaryCodePoint(paddingChar)) {
+            n >>= 1;
+        }
         if (right) {
             buff.append(string);
         }
         for (int i = 0; i < n; i++) {
-            buff.append(paddingChar);
+            buff.appendCodePoint(paddingChar);
         }
         if (!right) {
             buff.append(string);
@@ -871,21 +906,73 @@ public class StringUtils {
      * @param s the string
      * @param leading if leading characters should be removed
      * @param trailing if trailing characters should be removed
-     * @param sp what to remove (only the first character is used)
-     *      or null for a space
+     * @param characters what to remove or {@code null} for a space
      * @return the trimmed string
      */
-    public static String trim(String s, boolean leading, boolean trailing,
-            String sp) {
-        char space = sp == null || sp.isEmpty() ? ' ' : sp.charAt(0);
+    public static String trim(String s, boolean leading, boolean trailing, String characters) {
+        if (characters == null || characters.isEmpty()) {
+            return trim(s, leading, trailing, ' ');
+        }
+        int length = characters.length();
+        if (length == 1) {
+            return trim(s, leading, trailing, characters.charAt(0));
+        }
+        IntPredicate test;
+        int count = characters.codePointCount(0, length);
+        check: if (count <= 2) {
+            int cp = characters.codePointAt(0);
+            if (count > 1) {
+                int cp2 = characters.codePointAt(Character.charCount(cp));
+                if (cp != cp2) {
+                    test = value -> value == cp || value == cp2;
+                    break check;
+                }
+            }
+            test = value -> value == cp;
+        } else {
+            HashSet<Integer> set = new HashSet<>();
+            characters.codePoints().forEach(set::add);
+            test = set::contains;
+        }
+        return trim(s, leading, trailing, test);
+    }
+
+    private static String trim(String s, boolean leading, boolean trailing, IntPredicate test) {
         int begin = 0, end = s.length();
         if (leading) {
-            while (begin < end && s.charAt(begin) == space) {
+            int cp;
+            while (begin < end && test.test(cp = s.codePointAt(begin))) {
+                begin += Character.charCount(cp);
+            }
+        }
+        if (trailing) {
+            int cp;
+            while (end > begin && test.test(cp = s.codePointBefore(end))) {
+                end -= Character.charCount(cp);
+            }
+        }
+        // substring() returns self if start == 0 && end == length()
+        return s.substring(begin, end);
+    }
+
+    /**
+     * Trim a character from a string.
+     *
+     * @param s the string
+     * @param leading if leading characters should be removed
+     * @param trailing if trailing characters should be removed
+     * @param character what to remove
+     * @return the trimmed string
+     */
+    public static String trim(String s, boolean leading, boolean trailing, char character) {
+        int begin = 0, end = s.length();
+        if (leading) {
+            while (begin < end && s.charAt(begin) == character) {
                 begin++;
             }
         }
         if (trailing) {
-            while (end > begin && s.charAt(end - 1) == space) {
+            while (end > begin && s.charAt(end - 1) == character) {
                 end--;
             }
         }
@@ -943,6 +1030,29 @@ public class StringUtils {
             endIndex--;
         }
         return builder.append(s, beginIndex, endIndex);
+    }
+
+    /**
+     * Truncates the specified string to the specified length. This method,
+     * unlike {@link String#substring(int, int)}, doesn't break Unicode code
+     * points. If the specified length in characters breaks a valid pair of
+     * surrogates, the whole pair is not included into result.
+     *
+     * @param s
+     *            the string to truncate
+     * @param maximumLength
+     *            the maximum length in characters
+     * @return the specified string if it isn't longer than the specified
+     *         maximum length, and the truncated string otherwise
+     */
+    public static String truncateString(String s, int maximumLength) {
+        if (s.length() > maximumLength) {
+            s = maximumLength > 0 ? s.substring(0,
+                    Character.isSurrogatePair(s.charAt(maximumLength - 1), s.charAt(maximumLength)) ? maximumLength - 1
+                            : maximumLength)
+                    : "";
+        }
+        return s;
     }
 
     /**
@@ -1050,30 +1160,32 @@ public class StringUtils {
      *
      * @param baos the output stream, or {@code null}
      * @param s the hex encoded string
+     * @param start the start index
+     * @param end the end index, exclusive
      * @return the specified output stream or a new output stream
      */
-    public static ByteArrayOutputStream convertHexWithSpacesToBytes(ByteArrayOutputStream baos, String s) {
-        int len = s.length();
+    public static ByteArrayOutputStream convertHexWithSpacesToBytes(ByteArrayOutputStream baos, String s, int start,
+            int end) {
         if (baos == null) {
-            baos = new ByteArrayOutputStream(len / 2);
+            baos = new ByteArrayOutputStream((end - start) >>> 1);
         }
         int mask = 0;
         int[] hex = HEX_DECODE;
         try {
-            loop: for (int i = 0;;) {
+            loop: for (int i = start;;) {
                 char c1, c2;
                 do {
-                    if (i >= len) {
+                    if (i >= end) {
                         break loop;
                     }
                     c1 = s.charAt(i++);
                 } while (c1 == ' ');
                 do {
-                    if (i >= len) {
+                    if (i >= end) {
                         if (((mask | hex[c1]) & ~255) != 0) {
-                            throw DbException.get(ErrorCode.HEX_STRING_WRONG_1, s);
+                            throw getHexStringException(ErrorCode.HEX_STRING_WRONG_1, s, start, end);
                         }
-                        throw DbException.get(ErrorCode.HEX_STRING_ODD_1, s);
+                        throw getHexStringException(ErrorCode.HEX_STRING_ODD_1, s, start, end);
                     }
                     c2 = s.charAt(i++);
                 } while (c2 == ' ');
@@ -1082,12 +1194,16 @@ public class StringUtils {
                 baos.write(d);
             }
         } catch (ArrayIndexOutOfBoundsException e) {
-            throw DbException.get(ErrorCode.HEX_STRING_WRONG_1, s);
+            throw getHexStringException(ErrorCode.HEX_STRING_WRONG_1, s, start, end);
         }
         if ((mask & ~255) != 0) {
-            throw DbException.get(ErrorCode.HEX_STRING_WRONG_1, s);
+            throw getHexStringException(ErrorCode.HEX_STRING_WRONG_1, s, start, end);
         }
         return baos;
+    }
+
+    private static DbException getHexStringException(int code, String s, int start, int end) {
+        return DbException.get(code, s.substring(start, end));
     }
 
     /**
@@ -1108,14 +1224,14 @@ public class StringUtils {
      * @return the hex encoded string
      */
     public static String convertBytesToHex(byte[] value, int len) {
-        char[] buff = new char[len + len];
+        byte[] bytes = new byte[len * 2];
         char[] hex = HEX;
-        for (int i = 0; i < len; i++) {
+        for (int i = 0, j = 0; i < len; i++) {
             int c = value[i] & 0xff;
-            buff[i + i] = hex[c >> 4];
-            buff[i + i + 1] = hex[c & 0xf];
+            bytes[j++] = (byte) hex[c >> 4];
+            bytes[j++] = (byte) hex[c & 0xf];
         }
-        return new String(buff);
+        return new String(bytes, StandardCharsets.ISO_8859_1);
     }
 
     /**
@@ -1223,13 +1339,35 @@ public class StringUtils {
      * @param positiveValue the number to append
      * @return the specified string builder
      */
-    public static StringBuilder appendZeroPadded(StringBuilder builder, int length, long positiveValue) {
-        String s = Long.toString(positiveValue);
+    public static StringBuilder appendZeroPadded(StringBuilder builder, int length, int positiveValue) {
+        String s = Integer.toString(positiveValue);
         length -= s.length();
         for (; length > 0; length--) {
             builder.append('0');
         }
         return builder.append(s);
+    }
+
+    /**
+     * Appends the specified string or its part to the specified builder with
+     * maximum builder length limit.
+     *
+     * @param builder the string builder
+     * @param s the string to append
+     * @param length the length limit
+     * @return the specified string builder
+     */
+    public static StringBuilder appendToLength(StringBuilder builder, String s, int length) {
+        int builderLength = builder.length();
+        if (builderLength < length) {
+            int need = length - builderLength;
+            if (need >= s.length()) {
+                builder.append(s);
+            } else {
+                builder.append(s, 0, need);
+            }
+        }
+        return builder;
     }
 
     /**
@@ -1245,4 +1383,32 @@ public class StringUtils {
         return replaceAll(pattern, "\\", "\\\\");
     }
 
+    /**
+     * Case-sensitive check if a {@param text} starts with a {@param prefix}.
+     * It only calls {@code String.startsWith()} and is only here for API consistency
+     *
+     * @param text the full text starting with a prefix
+     * @param prefix the full text starting with a prefix
+     * @return TRUE only if text starts with the prefix
+     */
+    public static boolean startsWith(String text, String prefix) {
+        return text.startsWith(prefix);
+    }
+
+    /**
+     * Case-Insensitive check if a {@param text} starts with a {@param prefix}.
+     *
+     * @param text the full text starting with a prefix
+     * @param prefix the full text starting with a prefix
+     * @return TRUE only if text starts with the prefix
+     */
+    public static boolean startsWithIgnoringCase(String text, String prefix) {
+        if (text.length() < prefix.length()) {
+            return false;
+        } else {
+            Collator collator = Collator.getInstance();
+            collator.setStrength(Collator.PRIMARY);
+            return collator.equals(text.substring(0, prefix.length()), prefix);
+        }
+    }
 }

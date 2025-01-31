@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,9 +9,7 @@ import java.util.Collections;
 import java.util.List;
 import org.h2.command.ddl.CreateTableData;
 import org.h2.engine.Database;
-import org.h2.engine.DbSettings;
 import org.h2.index.IndexType;
-import org.h2.mvstore.db.MVTableEngine;
 import org.h2.result.SearchRow;
 import org.h2.result.SortOrder;
 import org.h2.util.StringUtils;
@@ -35,7 +33,7 @@ public abstract class TableBase extends Table {
     private final boolean globalTemporary;
 
     /**
-     * Returns main index column if index is an primary key index and has only
+     * Returns main index column if index is a primary key index and has only
      * one column with _ROWID_ compatible data type.
      *
      * @param indexType type of an index
@@ -47,7 +45,7 @@ public abstract class TableBase extends Table {
             return SearchRow.ROWID_INDEX;
         }
         IndexColumn first = cols[0];
-        if (first.sortType != SortOrder.ASCENDING) {
+        if ((first.sortType & SortOrder.DESCENDING) != 0) {
             return SearchRow.ROWID_INDEX;
         }
         switch (first.column.getType().getValueType()) {
@@ -83,7 +81,16 @@ public abstract class TableBase extends Table {
     }
 
     @Override
+    public String getCreateSQLForMeta() {
+        return getCreateSQL(true);
+    }
+
+    @Override
     public String getCreateSQL() {
+        return getCreateSQL(false);
+    }
+
+    private String getCreateSQL(boolean forMeta) {
         Database db = getDatabase();
         if (db == null) {
             // closed
@@ -103,9 +110,6 @@ public abstract class TableBase extends Table {
             buff.append("MEMORY ");
         }
         buff.append("TABLE ");
-        if (isHidden) {
-            buff.append("IF NOT EXISTS ");
-        }
         getSQL(buff, DEFAULT_SQL_FLAGS);
         if (comment != null) {
             buff.append(" COMMENT ");
@@ -116,15 +120,11 @@ public abstract class TableBase extends Table {
             if (i > 0) {
                 buff.append(",\n    ");
             }
-            buff.append(columns[i].getCreateSQL());
+            buff.append(columns[i].getCreateSQL(forMeta));
         }
         buff.append("\n)");
         if (tableEngine != null) {
-            DbSettings s = db.getSettings();
-            String d = s.defaultTableEngine;
-            if (d == null && s.mvStore) {
-                d = MVTableEngine.class.getName();
-            }
+            String d = db.getSettings().defaultTableEngine;
             if (d == null || !tableEngine.endsWith(d)) {
                 buff.append("\nENGINE ");
                 StringUtils.quoteIdentifier(buff, tableEngine);
@@ -141,9 +141,6 @@ public abstract class TableBase extends Table {
         }
         if (!isPersistIndexes() && !isPersistData()) {
             buff.append("\nNOT PERSISTENT");
-        }
-        if (isHidden) {
-            buff.append("\nHIDDEN");
         }
         return buff.toString();
     }

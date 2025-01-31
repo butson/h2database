@@ -1,11 +1,13 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
 
 import org.h2.engine.CastDataProvider;
+import org.h2.engine.Constants;
+import org.h2.message.DbException;
 
 /**
  * Implementation of the ARRAY data type.
@@ -15,15 +17,20 @@ public final class ValueArray extends ValueCollectionBase {
     /**
      * Empty array.
      */
-    public static final ValueArray EMPTY = get(Value.EMPTY_VALUES, null);
+    public static final ValueArray EMPTY = get(TypeInfo.TYPE_NULL, Value.EMPTY_VALUES, null);
 
     private TypeInfo type;
 
-    private TypeInfo componentType;
+    private final TypeInfo componentType;
 
     private ValueArray(TypeInfo componentType, Value[] list, CastDataProvider provider) {
         super(list);
-        for (int i = 0, l = list.length; i < l; i++) {
+        int length = list.length;
+        if (length > Constants.MAX_ARRAY_CARDINALITY) {
+            String typeName = getTypeName(getValueType());
+            throw DbException.getValueTooLongException(typeName, typeName, length);
+        }
+        for (int i = 0; i < length; i++) {
             list[i] = list[i].castTo(componentType, provider);
         }
         this.componentType = componentType;
@@ -38,11 +45,7 @@ public final class ValueArray extends ValueCollectionBase {
      * @return the value
      */
     public static ValueArray get(Value[] list, CastDataProvider provider) {
-        TypeInfo t = TypeInfo.TYPE_NULL;
-        for (Value v : list) {
-            t = TypeInfo.getHigherType(t, v.getType());
-        }
-        return new ValueArray(t, list, provider);
+        return new ValueArray(TypeInfo.getHigherType(list), list, provider);
     }
 
     /**
@@ -63,8 +66,7 @@ public final class ValueArray extends ValueCollectionBase {
         TypeInfo type = this.type;
         if (type == null) {
             TypeInfo componentType = getComponentType();
-            this.type = type = TypeInfo.getTypeInfo(getValueType(), values.length, 0,
-                    new ExtTypeInfoArray(componentType));
+            this.type = type = TypeInfo.getTypeInfo(getValueType(), values.length, 0, componentType);
         }
         return type;
     }

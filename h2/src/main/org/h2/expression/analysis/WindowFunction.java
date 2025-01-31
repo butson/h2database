@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,7 +11,7 @@ import java.util.Iterator;
 
 import org.h2.command.query.Select;
 import org.h2.command.query.SelectGroups;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ValueExpression;
 import org.h2.message.DbException;
@@ -149,12 +149,12 @@ public class WindowFunction extends DataAnalysisOperation {
     }
 
     @Override
-    protected void updateAggregate(Session session, SelectGroups groupData, int groupRowId) {
+    protected void updateAggregate(SessionLocal session, SelectGroups groupData, int groupRowId) {
         updateOrderedAggregate(session, groupData, groupRowId, over.getOrderBy());
     }
 
     @Override
-    protected void updateGroupAggregates(Session session, int stage) {
+    protected void updateGroupAggregates(SessionLocal session, int stage) {
         super.updateGroupAggregates(session, stage);
         if (args != null) {
             for (Expression expr : args) {
@@ -169,7 +169,7 @@ public class WindowFunction extends DataAnalysisOperation {
     }
 
     @Override
-    protected void rememberExpressions(Session session, Value[] array) {
+    protected void rememberExpressions(SessionLocal session, Value[] array) {
         if (args != null) {
             for (int i = 0, cnt = args.length; i < cnt; i++) {
                 array[i] = args[i].getValue(session);
@@ -183,8 +183,8 @@ public class WindowFunction extends DataAnalysisOperation {
     }
 
     @Override
-    protected void getOrderedResultLoop(Session session, HashMap<Integer, Value> result, ArrayList<Value[]> ordered,
-            int rowIdColumn) {
+    protected void getOrderedResultLoop(SessionLocal session, HashMap<Integer, Value> result,
+            ArrayList<Value[]> ordered, int rowIdColumn) {
         switch (type) {
         case ROW_NUMBER:
             for (int i = 0, size = ordered.size(); i < size;) {
@@ -215,7 +215,7 @@ public class WindowFunction extends DataAnalysisOperation {
             getRatioToReport(result, ordered, rowIdColumn);
             break;
         default:
-            throw DbException.throwInternalError("type=" + type);
+            throw DbException.getInternalError("type=" + type);
         }
     }
 
@@ -283,7 +283,7 @@ public class WindowFunction extends DataAnalysisOperation {
     }
 
     private void getLeadLag(HashMap<Integer, Value> result, ArrayList<Value[]> ordered, int rowIdColumn,
-            Session session) {
+            SessionLocal session) {
         int size = ordered.size();
         int numExpressions = getNumExpressions();
         TypeInfo dataType = args[0].getType();
@@ -347,7 +347,8 @@ public class WindowFunction extends DataAnalysisOperation {
         }
     }
 
-    private void getNth(Session session, HashMap<Integer, Value> result, ArrayList<Value[]> ordered, int rowIdColumn) {
+    private void getNth(SessionLocal session, HashMap<Integer, Value> result, ArrayList<Value[]> ordered,
+            int rowIdColumn) {
         int size = ordered.size();
         for (int i = 0; i < size; i++) {
             Value[] row = ordered.get(i);
@@ -374,7 +375,7 @@ public class WindowFunction extends DataAnalysisOperation {
                 break;
             }
             default:
-                throw DbException.throwInternalError("type=" + type);
+                throw DbException.getInternalError("type=" + type);
             }
             result.put(rowId, v);
         }
@@ -404,7 +405,7 @@ public class WindowFunction extends DataAnalysisOperation {
             } else {
                 v = row[0];
                 if (v != ValueNull.INSTANCE) {
-                    v = v.convertToDouble().divide(value, ValueDouble.PRECISION);
+                    v = v.convertToDouble().divide(value, TypeInfo.TYPE_DOUBLE);
                 }
             }
             result.put(row[rowIdColumn].getInt(), v);
@@ -412,7 +413,7 @@ public class WindowFunction extends DataAnalysisOperation {
     }
 
     @Override
-    protected Value getAggregatedValue(Session session, Object aggregateData) {
+    protected Value getAggregatedValue(SessionLocal session, Object aggregateData) {
         throw DbException.getUnsupportedException("Window function");
     }
 
@@ -427,7 +428,7 @@ public class WindowFunction extends DataAnalysisOperation {
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         if (over.getWindowFrame() != null) {
             switch (type) {
             case FIRST_VALUE:
@@ -500,12 +501,12 @@ public class WindowFunction extends DataAnalysisOperation {
         case NTH_VALUE:
             return args[0].getType();
         default:
-            throw DbException.throwInternalError("type=" + type);
+            throw DbException.getInternalError("type=" + type);
         }
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
         builder.append(type.getSQL()).append('(');
         if (args != null) {
             writeExpressions(builder, args, sqlFlags);

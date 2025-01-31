@@ -1,17 +1,14 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.test.unit;
 
-import java.nio.channels.FileChannel;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-
-import org.h2.engine.Constants;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
@@ -49,7 +46,6 @@ public class TestPageStoreCoverage extends TestDb {
         testMoveRoot();
         testBasic();
         testReadOnly();
-        testIncompleteCreate();
         testBackupRestore();
         testTrim();
         testLongTransaction();
@@ -108,25 +104,25 @@ public class TestPageStoreCoverage extends TestDb {
             stat.execute("create table test2(id identity, name varchar)");
             stat.execute("create index idx_test2_name on test2(name desc)");
             stat.execute("create index idx_test2_name2 on test2(name, id)");
-            stat.execute("insert into test2 " +
-                    "select null, space(10) from system_range(1, 10)");
+            stat.execute("insert into test2(name) " +
+                    "select space(10) from system_range(1, 10)");
             stat.execute("create table test3(id identity, name varchar)");
             stat.execute("checkpoint");
             conn.setAutoCommit(false);
             stat.execute("create table test4(id identity, name varchar)");
             stat.execute("create index idx_test4_name2 on test(name, id)");
-            stat.execute("insert into test " +
-                    "select null, space(10) from system_range(1, 10)");
-            stat.execute("insert into test3 " +
-                    "select null, space(10) from system_range(1, 10)");
-            stat.execute("insert into test4 " +
-                    "select null, space(10) from system_range(1, 10)");
+            stat.execute("insert into test(name) " +
+                    "select space(10) from system_range(1, 10)");
+            stat.execute("insert into test3(name) " +
+                    "select space(10) from system_range(1, 10)");
+            stat.execute("insert into test4(name) " +
+                    "select space(10) from system_range(1, 10)");
             stat.execute("truncate table test2");
             stat.execute("drop index idx_test_name");
             stat.execute("drop index idx_test2_name");
             stat.execute("drop table test2");
-            stat.execute("insert into test " +
-                    "select null, space(10) from system_range(1, 10)");
+            stat.execute("insert into test(name) " +
+                    "select space(10) from system_range(1, 10)");
             stat.execute("shutdown immediately");
         }
         try (Connection conn = getConnection(URL)) {
@@ -156,8 +152,8 @@ public class TestPageStoreCoverage extends TestDb {
         Statement stat = conn.createStatement();
         stat.execute("create table test(id identity, name varchar)");
         conn.setAutoCommit(false);
-        stat.execute("insert into test " +
-                "select null, space(10) from system_range(1, 10)");
+        stat.execute("insert into test(name) " +
+                "select space(10) from system_range(1, 10)");
         Connection conn2;
         conn2 = getConnection(URL);
         Statement stat2 = conn2.createStatement();
@@ -165,8 +161,8 @@ public class TestPageStoreCoverage extends TestDb {
         // large transaction
         stat2.execute("create table test2(id identity, name varchar)");
         stat2.execute("create index idx_test2_name on test2(name)");
-        stat2.execute("insert into test2 " +
-                "select null, x || space(10000) from system_range(1, 100)");
+        stat2.execute("insert into test2(name) " +
+                "select x || space(10000) from system_range(1, 100)");
         stat2.execute("drop table test2");
         conn2.close();
         stat.execute("drop table test");
@@ -242,27 +238,6 @@ public class TestPageStoreCoverage extends TestDb {
         conn.close();
         FileUtils.delete(getBaseDir() + "/backup.zip");
         deleteDb("pageStore2");
-    }
-
-    private void testIncompleteCreate() throws Exception {
-        deleteDb("pageStoreCoverage");
-        Connection conn;
-        String fileName = getBaseDir() + "/pageStore" + Constants.SUFFIX_PAGE_FILE;
-        conn = getConnection("pageStoreCoverage");
-        Statement stat = conn.createStatement();
-        stat.execute("drop table if exists INFORMATION_SCHEMA.LOB_DATA");
-        stat.execute("drop table if exists INFORMATION_SCHEMA.LOB_MAP");
-        conn.close();
-        FileChannel f = FileUtils.open(fileName, "rw");
-        // create a new database
-        conn = getConnection("pageStoreCoverage");
-        conn.close();
-        f = FileUtils.open(fileName, "rw");
-        f.truncate(16);
-        // create a new database
-        conn = getConnection("pageStoreCoverage");
-        conn.close();
-        deleteDb("pageStoreCoverage");
     }
 
 }

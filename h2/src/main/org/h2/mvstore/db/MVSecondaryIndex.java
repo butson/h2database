@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,20 +13,20 @@ import java.util.Queue;
 import org.h2.api.ErrorCode;
 import org.h2.command.query.AllColumnsForPlan;
 import org.h2.engine.Database;
-import org.h2.engine.Session;
-import org.h2.index.BaseIndex;
+import org.h2.engine.SessionLocal;
 import org.h2.index.Cursor;
 import org.h2.index.IndexType;
 import org.h2.index.SingleRowCursor;
 import org.h2.message.DbException;
-import org.h2.mvstore.DataUtils;
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
 import org.h2.mvstore.MVStoreException;
 import org.h2.mvstore.tx.Transaction;
 import org.h2.mvstore.tx.TransactionMap;
+import org.h2.mvstore.tx.TransactionMap.TMIterator;
 import org.h2.mvstore.type.DataType;
 import org.h2.result.Row;
+import org.h2.result.RowFactory;
 import org.h2.result.SearchRow;
 import org.h2.result.SortOrder;
 import org.h2.table.IndexColumn;
@@ -38,7 +38,7 @@ import org.h2.value.VersionedValue;
 /**
  * An index stored in a MVStore.
  */
-public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchRow,Value> {
+public final class MVSecondaryIndex extends MVIndex<SearchRow, Value> {
 
     /**
      * The multi-value table.
@@ -47,22 +47,23 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     private final TransactionMap<SearchRow,Value> dataMap;
 
     public MVSecondaryIndex(Database db, MVTable table, int id, String indexName,
-                IndexColumn[] columns, IndexType indexType) {
-        super(table, id, indexName, columns, indexType);
+                IndexColumn[] columns, int uniqueColumnCount, IndexType indexType) {
+        super(table, id, indexName, columns, uniqueColumnCount, indexType);
         this.mvTable = table;
         if (!database.isStarting()) {
             checkIndexColumnTypes(columns);
         }
         String mapName = "index." + getId();
-        assert db.isStarting() || !db.getStore().getMvStore().getMetaMap().containsKey(DataUtils.META_NAME + mapName);
         RowDataType keyType = getRowFactory().getRowDataType();
-        ValueDataType valueType = new ValueDataType();
         Transaction t = mvTable.getTransactionBegin();
-        dataMap = t.openMap(mapName, keyType, valueType);
+        dataMap = t.openMap(mapName, keyType, NullValueDataType.INSTANCE);
         dataMap.map.setVolatile(!table.isPersistData() || !indexType.isPersistent());
+        if (!db.isStarting()) {
+            dataMap.clear();
+        }
         t.commit();
         if (!keyType.equals(dataMap.getKeyType())) {
-            throw DbException.throwInternalError(
+            throw DbException.getInternalError(
                     "Incompatible key type, expected " + keyType + " but got "
                             + dataMap.getKeyType() + " for index " + indexName);
         }
@@ -134,8 +135,8 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
                 Source s = queue.poll();
                 SearchRow row = s.next();
 
-                if (indexType.isUnique() && !mayHaveNullDuplicates(row)) {
-                    checkUnique(true, dataMap, row, Long.MIN_VALUE);
+                if (needsUniqueCheck(row)) {
+                    checkUnique(false, dataMap, row, Long.MIN_VALUE);
                 }
 
                 dataMap.putCommitted(row, ValueNull.INSTANCE);
@@ -154,15 +155,14 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
 
     private MVMap<SearchRow,Value> openMap(String mapName) {
         RowDataType keyType = getRowFactory().getRowDataType();
-        ValueDataType valueType = new ValueDataType();
         MVMap.Builder<SearchRow,Value> builder = new MVMap.Builder<SearchRow,Value>()
                                                 .singleWriter()
                                                 .keyType(keyType)
-                                                .valueType(valueType);
+                                                .valueType(NullValueDataType.INSTANCE);
         MVMap<SearchRow, Value> map = database.getStore().getMvStore()
                 .openMap(mapName, builder);
         if (!keyType.equals(map.getKeyType())) {
-            throw DbException.throwInternalError(
+            throw DbException.getInternalError(
                     "Incompatible key type, expected " + keyType + " but got "
                             + map.getKeyType() + " for map " + mapName);
         }
@@ -170,24 +170,18 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public void close(Session session) {
+    public void close(SessionLocal session) {
         // ok
     }
 
     @Override
-    public void add(Session session, Row row) {
+    public void add(SessionLocal session, Row row) {
         TransactionMap<SearchRow,Value> map = getMap(session);
         SearchRow key = convertToKey(row, null);
-        boolean checkRequired, allowNonRepeatableRead;
-        if (indexType.isUnique() && !mayHaveNullDuplicates(row)) {
-            checkRequired = true;
-            allowNonRepeatableRead = session.getTransaction().allowNonRepeatableRead();
-        } else {
-            checkRequired = false;
-            allowNonRepeatableRead = false;
-        }
+        boolean checkRequired = needsUniqueCheck(row);
         if (checkRequired) {
-            checkUnique(allowNonRepeatableRead, map, row, Long.MIN_VALUE);
+            boolean repeatableRead = !session.getTransaction().allowNonRepeatableRead();
+            checkUnique(repeatableRead, map, row, Long.MIN_VALUE);
         }
 
         try {
@@ -197,26 +191,32 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
         }
 
         if (checkRequired) {
-            checkUnique(allowNonRepeatableRead, map, row, row.getKey());
+            checkUnique(false, map, row, row.getKey());
         }
     }
 
-    private void checkUnique(boolean allowNonRepeatableRead, TransactionMap<SearchRow,Value> map, SearchRow row,
+    private void checkUnique(boolean repeatableRead, TransactionMap<SearchRow,Value> map, SearchRow row,
             long newKey) {
-        SearchRow from = convertToKey(row, Boolean.FALSE);
-        SearchRow to = convertToKey(row, Boolean.TRUE);
-        if (!allowNonRepeatableRead) {
-            Iterator<SearchRow> it = map.keyIterator(from, to);
-            while (it.hasNext()) {
-                SearchRow k = it.next();
+        RowFactory uniqueRowFactory = getUniqueRowFactory();
+        SearchRow from = uniqueRowFactory.createRow();
+        from.copyFrom(row);
+        from.setKey(Long.MIN_VALUE);
+        SearchRow to = uniqueRowFactory.createRow();
+        to.copyFrom(row);
+        to.setKey(Long.MAX_VALUE);
+        if (repeatableRead) {
+            // In order to guarantee repeatable reads, snapshot taken at the beginning of the statement or transaction
+            // need to be checked additionally, because existence of the key should be accounted for,
+            // even if since then, it was already deleted by another (possibly committed) transaction.
+            TMIterator<SearchRow, Value, SearchRow> it = map.keyIterator(from, to);
+            for (SearchRow k; (k = it.fetchNext()) != null;) {
                 if (newKey != k.getKey() && !map.isDeletedByCurrentTransaction(k)) {
                     throw getDuplicateKeyException(k.toString());
                 }
             }
         }
-        Iterator<SearchRow> it = map.keyIteratorUncommitted(from, to);
-        while (it.hasNext()) {
-            SearchRow k = it.next();
+        TMIterator<SearchRow, Value, SearchRow> it = map.keyIteratorUncommitted(from, to);
+        for (SearchRow k; (k = it.fetchNext()) != null;) {
             if (newKey != k.getKey()) {
                 if (map.getImmediate(k) != null) {
                     // committed
@@ -228,7 +228,7 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public void remove(Session session, Row row) {
+    public void remove(SessionLocal session, Row row) {
         SearchRow searchRow = convertToKey(row, null);
         TransactionMap<SearchRow,Value> map = getMap(session);
         try {
@@ -243,7 +243,7 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public void update(Session session, Row oldRow, Row newRow) {
+    public void update(SessionLocal session, Row oldRow, Row newRow) {
         SearchRow searchRowOld = convertToKey(oldRow, null);
         SearchRow searchRowNew = convertToKey(newRow, null);
         if (!rowsAreEqual(searchRowOld, searchRowNew)) {
@@ -266,15 +266,14 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public Cursor find(Session session, SearchRow first, SearchRow last) {
-        return find(session, first, false, last);
+    public Cursor find(SessionLocal session, SearchRow first, SearchRow last, boolean reverse) {
+        return find(session, first, false, last, reverse);
     }
 
-    private Cursor find(Session session, SearchRow first, boolean bigger, SearchRow last) {
-        SearchRow min = convertToKey(first, bigger);
-        TransactionMap<SearchRow,Value> map = getMap(session);
-        SearchRow max = convertToKey(last, Boolean.TRUE);
-        return new MVStoreCursor(session, map.keyIterator(min, max), mvTable);
+    private Cursor find(SessionLocal session, SearchRow first, boolean bigger, SearchRow last, boolean reverse) {
+        SearchRow min = convertToKey(first, bigger ^ reverse);
+        SearchRow max = convertToKey(last, !reverse);
+        return new MVStoreCursor(session, getMap(session).keyIterator(min, max, reverse), mvTable);
     }
 
     private SearchRow convertToKey(SearchRow r, Boolean minMax) {
@@ -296,19 +295,19 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public double getCost(Session session, int[] masks,
+    public double getCost(SessionLocal session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
-            AllColumnsForPlan allColumnsSet) {
+            AllColumnsForPlan allColumnsSet, boolean isSelectCommand) {
         try {
             return 10 * getCostRangeIndex(masks, dataMap.sizeAsLongMax(),
-                    filters, filter, sortOrder, false, allColumnsSet);
+                    filters, filter, sortOrder, false, allColumnsSet, isSelectCommand);
         } catch (MVStoreException e) {
             throw DbException.get(ErrorCode.OBJECT_CLOSED, e);
         }
     }
 
     @Override
-    public void remove(Session session) {
+    public void remove(SessionLocal session) {
         TransactionMap<SearchRow,Value> map = getMap(session);
         if (!map.isClosed()) {
             Transaction t = session.getTransaction();
@@ -317,7 +316,7 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public void truncate(Session session) {
+    public void truncate(SessionLocal session) {
         TransactionMap<SearchRow,Value> map = getMap(session);
         map.clear();
     }
@@ -328,18 +327,14 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public Cursor findFirstOrLast(Session session, boolean first) {
-        TransactionMap<SearchRow,Value> map = getMap(session);
-        SearchRow key = first ? map.firstKey() : map.lastKey();
-        while (true) {
-            if (key == null) {
-                return new SingleRowCursor(null);
-            }
+    public Cursor findFirstOrLast(SessionLocal session, boolean first) {
+        TMIterator<SearchRow, Value, SearchRow> iter = getMap(session).keyIterator(null, !first);
+        for (SearchRow key; (key = iter.fetchNext()) != null;) {
             if (key.getValue(columnIds[0]) != ValueNull.INSTANCE) {
                 return new SingleRowCursor(mvTable.getRow(session, key.getKey()));
             }
-            key = first ? map.higherKey(key) : map.lowerKey(key);
         }
+        return SingleRowCursor.EMPTY;
     }
 
     @Override
@@ -352,13 +347,13 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public long getRowCount(Session session) {
+    public long getRowCount(SessionLocal session) {
         TransactionMap<SearchRow,Value> map = getMap(session);
         return map.sizeAsLong();
     }
 
     @Override
-    public long getRowCountApproximation() {
+    public long getRowCountApproximation(SessionLocal session) {
         try {
             return dataMap.sizeAsLongMax();
         } catch (MVStoreException e) {
@@ -367,19 +362,13 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
     }
 
     @Override
-    public long getDiskSpaceUsed() {
-        // TODO estimate disk space usage
-        return 0;
-    }
-
-    @Override
     public boolean canFindNext() {
         return true;
     }
 
     @Override
-    public Cursor findNext(Session session, SearchRow higherThan, SearchRow last) {
-        return find(session, higherThan, true, last);
+    public Cursor findNext(SessionLocal session, SearchRow higherThan, SearchRow last) {
+        return find(session, higherThan, true, last, false);
     }
 
     /**
@@ -388,7 +377,7 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
      * @param session the session
      * @return the map
      */
-    private TransactionMap<SearchRow,Value> getMap(Session session) {
+    private TransactionMap<SearchRow,Value> getMap(SessionLocal session) {
         if (session == null) {
             return dataMap;
         }
@@ -406,13 +395,13 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
      */
     static final class MVStoreCursor implements Cursor {
 
-        private final Session             session;
-        private final Iterator<SearchRow> it;
+        private final SessionLocal             session;
+        private final TMIterator<SearchRow, Value, SearchRow> it;
         private final MVTable             mvTable;
         private       SearchRow           current;
         private       Row                 row;
 
-        MVStoreCursor(Session session, Iterator<SearchRow> it, MVTable mvTable) {
+        MVStoreCursor(SessionLocal session, TMIterator<SearchRow, Value, SearchRow> it, MVTable mvTable) {
             this.session = session;
             this.it = it;
             this.mvTable = mvTable;
@@ -436,7 +425,7 @@ public final class MVSecondaryIndex extends BaseIndex implements MVIndex<SearchR
 
         @Override
         public boolean next() {
-            current = it.hasNext() ? it.next() : null;
+            current = it.fetchNext();
             row = null;
             return current != null;
         }

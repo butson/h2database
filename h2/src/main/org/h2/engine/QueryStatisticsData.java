@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -23,7 +23,7 @@ public class QueryStatisticsData {
 
     private final HashMap<String, QueryEntry> map = new HashMap<>();
 
-    private int maxQueryEntries;
+    private volatile int maxQueryEntries;
 
     public QueryStatisticsData(int maxQueryEntries) {
         this.maxQueryEntries = maxQueryEntries;
@@ -50,14 +50,9 @@ public class QueryStatisticsData {
      *            to execute
      * @param rowCount the query or update row count
      */
-    public synchronized void update(String sqlStatement, long executionTimeNanos,
-            int rowCount) {
-        QueryEntry entry = map.get(sqlStatement);
-        if (entry == null) {
-            entry = new QueryEntry(sqlStatement);
-            map.put(sqlStatement, entry);
-        }
-        entry.update(executionTimeNanos, rowCount);
+    public synchronized void update(String sqlStatement, long executionTimeNanos, long rowCount) {
+        map.computeIfAbsent(sqlStatement, QueryEntry::new)
+                .update(executionTimeNanos, rowCount);
 
         // Age-out the oldest entries if the map gets too big.
         // Test against 1.5 x max-size so we don't do this too often
@@ -65,18 +60,11 @@ public class QueryStatisticsData {
             // Sort the entries by age
             ArrayList<QueryEntry> list = new ArrayList<>(map.values());
             list.sort(QUERY_ENTRY_COMPARATOR);
-            // Create a set of the oldest 1/3 of the entries
-            HashSet<QueryEntry> oldestSet =
-                    new HashSet<>(list.subList(0, list.size() / 3));
+            QueryEntry oldestToKeep = list.get(list.size() / 3);
             // Loop over the map using the set and remove
             // the oldest 1/3 of the entries.
-            for (Iterator<Entry<String, QueryEntry>> it =
-                    map.entrySet().iterator(); it.hasNext();) {
-                Entry<String, QueryEntry> mapEntry = it.next();
-                if (oldestSet.contains(mapEntry.getValue())) {
-                    it.remove();
-                }
-            }
+            map.entrySet().removeIf(mapEntry ->
+                                        QUERY_ENTRY_COMPARATOR.compare(oldestToKeep, mapEntry.getValue()) > 0);
         }
     }
 
@@ -119,12 +107,12 @@ public class QueryStatisticsData {
         /**
          * The minimum number of rows.
          */
-        public int rowCountMin;
+        public long rowCountMin;
 
         /**
          * The maximum number of rows.
          */
-        public int rowCountMax;
+        public long rowCountMax;
 
         /**
          * The total number of rows.
@@ -158,7 +146,7 @@ public class QueryStatisticsData {
          * @param timeNanos the execution time in nanos
          * @param rows the number of rows
          */
-        void update(long timeNanos, int rows) {
+        void update(long timeNanos, long rows) {
             count++;
             executionTimeMinNanos = Math.min(timeNanos, executionTimeMinNanos);
             executionTimeMaxNanos = Math.max(timeNanos, executionTimeMaxNanos);

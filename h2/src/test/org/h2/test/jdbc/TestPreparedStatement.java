@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,7 +11,9 @@ import java.io.InputStream;
 import java.io.StringReader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.net.URL;
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.JDBCType;
@@ -42,8 +44,6 @@ import org.h2.api.ErrorCode;
 import org.h2.api.H2Type;
 import org.h2.api.Interval;
 import org.h2.api.IntervalQualifier;
-import org.h2.api.Trigger;
-import org.h2.engine.SysProperties;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 import org.h2.util.Task;
@@ -79,7 +79,6 @@ public class TestPreparedStatement extends TestDb {
         testEnum(conn);
         testUUID(conn);
         testUUIDAsJavaObject(conn);
-        testScopedGeneratedKey(conn);
         testLobTempFiles(conn);
         testExecuteErrorTwice(conn);
         testTempView(conn);
@@ -90,6 +89,7 @@ public class TestPreparedStatement extends TestDb {
         testCancelReuse(conn);
         testCoalesce(conn);
         testPreparedStatementMetaData(conn);
+        testBigDecimal(conn);
         testDate(conn);
         testDate8(conn);
         testTime8(conn);
@@ -116,9 +116,11 @@ public class TestPreparedStatement extends TestDb {
         testParameterMetaData(conn);
         testColumnMetaDataWithEquals(conn);
         testColumnMetaDataWithIn(conn);
-        testValueResultSet(conn);
         testMultipleStatements(conn);
+        testParameterInSubquery(conn);
         testAfterRollback(conn);
+        testUnnestWithArrayParameter(conn);
+        testDateTimeWithParameter(conn);
         conn.close();
         testPreparedStatementWithLiteralsNone();
         testPreparedStatementWithIndexedParameterAndLiteralsNone();
@@ -191,7 +193,7 @@ public class TestPreparedStatement extends TestDb {
     }
 
     private static void testCallTablePrepared(Connection conn) throws SQLException {
-        PreparedStatement prep = conn.prepareStatement("call table(x int = (1))");
+        PreparedStatement prep = conn.prepareStatement("select * from table(x int = (1))");
         prep.executeQuery();
         prep.executeQuery();
     }
@@ -396,6 +398,8 @@ public class TestPreparedStatement extends TestDb {
     private void testUnknownDataType(Connection conn) throws SQLException {
         assertThrows(ErrorCode.UNKNOWN_DATA_TYPE_1, conn).
             prepareStatement("SELECT * FROM (SELECT ? FROM DUAL)");
+        assertThrows(ErrorCode.UNKNOWN_DATA_TYPE_1, conn).
+            prepareStatement("VALUES BITAND(?, ?)");
         PreparedStatement prep = conn.prepareStatement("SELECT -?");
         prep.setInt(1, 1);
         execute(prep);
@@ -407,7 +411,7 @@ public class TestPreparedStatement extends TestDb {
 
     private void testCancelReuse(Connection conn) throws Exception {
         conn.createStatement().execute(
-                "CREATE ALIAS SLEEP FOR \"java.lang.Thread.sleep\"");
+                "CREATE ALIAS SLEEP FOR 'java.lang.Thread.sleep(long)'");
         // sleep for 10 seconds
         final PreparedStatement prep = conn.prepareStatement(
                 "SELECT SLEEP(?) FROM SYSTEM_RANGE(1, 10000) LIMIT ?");
@@ -451,12 +455,12 @@ public class TestPreparedStatement extends TestDb {
         ResultSetMetaData meta = prep.getMetaData();
         assertEquals(2, meta.getColumnCount());
         assertEquals("INTEGER", meta.getColumnTypeName(1));
-        assertEquals("VARCHAR", meta.getColumnTypeName(2));
+        assertEquals("CHARACTER VARYING", meta.getColumnTypeName(2));
         prep = conn.prepareStatement("call 1");
         meta = prep.getMetaData();
         assertEquals(1, meta.getColumnCount());
         assertEquals("INTEGER", meta.getColumnTypeName(1));
-        prep = conn.prepareStatement("CALL UNNEST(ARRAY[1, 2])");
+        prep = conn.prepareStatement("SELECT * FROM UNNEST(ARRAY[1, 2])");
         meta = prep.getMetaData();
         assertEquals(1, meta.getColumnCount());
         assertEquals("INTEGER", meta.getColumnTypeName(1));
@@ -497,7 +501,7 @@ public class TestPreparedStatement extends TestDb {
                 rs.next();
             }
             assertEquals(goodSizes[i], rs.getString(1));
-            assertEquals(i, rs.getInt(1));
+            assertEquals(i + 1, rs.getInt(1));
             Object o = rs.getObject(1);
             assertEquals(String.class, o.getClass());
         }
@@ -515,7 +519,7 @@ public class TestPreparedStatement extends TestDb {
         for (int i = 0; i < badSizes.length; i++) {
             PreparedStatement prep = conn.prepareStatement("SELECT * FROM test_enum WHERE size = ?");
             prep.setObject(1, badSizes[i]);
-            if (config.lazy) {
+            if (config.lazy && !config.networked) {
                 ResultSet resultSet = prep.executeQuery();
                 assertThrows(ErrorCode.ENUM_VALUE_NOT_PERMITTED, resultSet).next();
             } else {
@@ -562,49 +566,6 @@ public class TestPreparedStatement extends TestDb {
         assertTrue(selectedUUID.toString().equals(uuidStr));
         assertTrue(selectedUUID.equals(origUUID));
         stat.execute("drop table test_uuid");
-    }
-
-    /**
-     * A trigger that creates a sequence value.
-     */
-    public static class SequenceTrigger implements Trigger {
-
-        @Override
-        public void fire(Connection conn, Object[] oldRow, Object[] newRow)
-                throws SQLException {
-            conn.setAutoCommit(false);
-            conn.createStatement().execute("call next value for seq");
-        }
-
-        @Override
-        public void init(Connection conn, String schemaName,
-                String triggerName, String tableName, boolean before, int type) {
-            // ignore
-        }
-
-    }
-
-    private void testScopedGeneratedKey(Connection conn) throws SQLException {
-        Statement stat = conn.createStatement();
-        stat.execute("create table test(id identity)");
-        stat.execute("create sequence seq start with 1000");
-        stat.execute("create trigger test_ins after insert on test call \"" +
-                SequenceTrigger.class.getName() + "\"");
-        stat.execute("insert into test values(null)", Statement.RETURN_GENERATED_KEYS);
-        ResultSet rs = stat.getGeneratedKeys();
-        rs.next();
-        // Generated key
-        assertEquals(1, rs.getLong(1));
-        stat.execute("insert into test values(100)");
-        rs = stat.getGeneratedKeys();
-        // No generated keys
-        assertFalse(rs.next());
-        // Value from sequence from trigger
-        rs = stat.executeQuery("select scope_identity()");
-        rs.next();
-        assertEquals(100, rs.getLong(1));
-        stat.execute("drop sequence seq");
-        stat.execute("drop table test");
     }
 
     private void testSetObject(Connection conn) throws SQLException {
@@ -690,6 +651,21 @@ public class TestPreparedStatement extends TestDb {
         case 6:
             prep.setObject(1, value, H2Type.INTEGER, 0);
         }
+    }
+
+    private void testBigDecimal(Connection conn) throws SQLException {
+        PreparedStatement prep = conn.prepareStatement("SELECT ?, ?");
+        BigDecimal bd = new BigDecimal("12300").setScale(-2, RoundingMode.UNNECESSARY);
+        prep.setBigDecimal(1, bd);
+        prep.setObject(2, bd);
+        ResultSet rs = prep.executeQuery();
+        rs.next();
+        bd = rs.getBigDecimal(1);
+        assertEquals(12300, bd.intValue());
+        assertEquals(0, bd.scale());
+        bd = rs.getBigDecimal(2);
+        assertEquals(12300, bd.intValue());
+        assertEquals(0, bd.scale());
     }
 
     private void testDate(Connection conn) throws SQLException {
@@ -942,11 +918,25 @@ public class TestPreparedStatement extends TestDb {
         prep.setInt(1, 2);
         prep.setString(2, "[1]");
         prep.executeUpdate();
+        prep.setInt(1, 3);
+        prep.setString(2, null);
+        prep.executeUpdate();
+        prep = conn.prepareStatement("INSERT INTO TEST VALUES (?, ?)");
+        prep.setInt(1, 4);
+        prep.setObject(2, "[1]", H2Type.JSON);
+        prep.executeUpdate();
+        prep.setInt(1, 5);
+        prep.setObject(2, null, H2Type.JSON);
+        prep.executeUpdate();
         try (ResultSet rs = stat.executeQuery("SELECT J FROM TEST ORDER BY ID")) {
             assertTrue(rs.next());
             assertEquals("\"[1]\"", rs.getString(1));
-            assertTrue(rs.next());
-            assertEquals("[1]", rs.getString(1));
+            for (int i = 0; i < 2; i++) {
+                assertTrue(rs.next());
+                assertEquals("[1]", rs.getString(1));
+                assertTrue(rs.next());
+                assertEquals(null, rs.getString(1));
+            }
             assertFalse(rs.next());
         }
         stat.execute("DROP TABLE TEST");
@@ -988,19 +978,10 @@ public class TestPreparedStatement extends TestDb {
     }
 
     private void testParameterMetaData(Connection conn) throws SQLException {
-        int numericType;
-        String numericName;
-        if (SysProperties.BIG_DECIMAL_IS_DECIMAL) {
-            numericType = Types.DECIMAL;
-            numericName = "DECIMAL";
-        } else {
-            numericType = Types.NUMERIC;
-            numericName = "NUMERIC";
-        }
         PreparedStatement prep = conn.prepareStatement("SELECT ?, ?, ? FROM DUAL");
         ParameterMetaData pm = prep.getParameterMetaData();
         assertEquals("java.lang.String", pm.getParameterClassName(1));
-        assertEquals("VARCHAR", pm.getParameterTypeName(1));
+        assertEquals("CHARACTER VARYING", pm.getParameterTypeName(1));
         assertEquals(3, pm.getParameterCount());
         assertEquals(ParameterMetaData.parameterModeIn, pm.getParameterMode(1));
         assertEquals(Types.VARCHAR, pm.getParameterType(1));
@@ -1015,22 +996,25 @@ public class TestPreparedStatement extends TestDb {
 
         Statement stat = conn.createStatement();
         stat.execute("CREATE TABLE TEST3(ID INT, " +
-                "NAME VARCHAR(255), DATA DECIMAL(10,2))");
+                "NAME VARCHAR(255), DATA1 DECIMAL(10,2), DATA2 NUMERIC(10,2))");
         PreparedStatement prep1 = conn.prepareStatement(
-                "UPDATE TEST3 SET ID=?, NAME=?, DATA=?");
+                "UPDATE TEST3 SET ID=?, NAME=?, DATA1=?, DATA2=?");
         PreparedStatement prep2 = conn.prepareStatement(
-                "INSERT INTO TEST3 VALUES(?, ?, ?)");
-        checkParameter(prep1, 1, "java.lang.Integer", 4, "INTEGER", 10, 0);
-        checkParameter(prep1, 2, "java.lang.String", 12, "VARCHAR", 255, 0);
-        checkParameter(prep1, 3, "java.math.BigDecimal", numericType, numericName, 10, 2);
-        checkParameter(prep2, 1, "java.lang.Integer", 4, "INTEGER", 10, 0);
-        checkParameter(prep2, 2, "java.lang.String", 12, "VARCHAR", 255, 0);
-        checkParameter(prep2, 3, "java.math.BigDecimal", numericType, numericName, 10, 2);
+                "INSERT INTO TEST3 VALUES(?, ?, ?, ?)");
+        checkParameter(prep1, 1, "java.lang.Integer", 4, "INTEGER", 32, 0);
+        checkParameter(prep1, 2, "java.lang.String", 12, "CHARACTER VARYING", 255, 0);
+        checkParameter(prep1, 3, "java.math.BigDecimal", Types.DECIMAL, "DECIMAL", 10, 2);
+        checkParameter(prep1, 4, "java.math.BigDecimal", Types.NUMERIC, "NUMERIC", 10, 2);
+        checkParameter(prep2, 1, "java.lang.Integer", 4, "INTEGER", 32, 0);
+        checkParameter(prep2, 2, "java.lang.String", 12, "CHARACTER VARYING", 255, 0);
+        checkParameter(prep2, 3, "java.math.BigDecimal", Types.DECIMAL, "DECIMAL", 10, 2);
+        checkParameter(prep2, 4, "java.math.BigDecimal", Types.NUMERIC, "NUMERIC", 10, 2);
         PreparedStatement prep3 = conn.prepareStatement(
-                "SELECT * FROM TEST3 WHERE ID=? AND NAME LIKE ? AND ?>DATA");
-        checkParameter(prep3, 1, "java.lang.Integer", 4, "INTEGER", 10, 0);
-        checkParameter(prep3, 2, "java.lang.String", 12, "VARCHAR", 0, 0);
-        checkParameter(prep3, 3, "java.math.BigDecimal", numericType, numericName, 10, 2);
+                "SELECT * FROM TEST3 WHERE ID=? AND NAME LIKE ? AND ?>DATA1 AND ?>DATA2");
+        checkParameter(prep3, 1, "java.lang.Integer", 4, "INTEGER", 32, 0);
+        checkParameter(prep3, 2, "java.lang.String", 12, "CHARACTER VARYING", 0, 0);
+        checkParameter(prep3, 3, "java.math.BigDecimal", Types.DECIMAL, "DECIMAL", 10, 2);
+        checkParameter(prep3, 4, "java.math.BigDecimal", Types.NUMERIC, "NUMERIC", 10, 2);
         stat.execute("DROP TABLE TEST3");
     }
 
@@ -1047,9 +1031,9 @@ public class TestPreparedStatement extends TestDb {
 
     private void testLikeIndex(Connection conn) throws SQLException {
         Statement stat = conn.createStatement();
-        stat.execute("CREATE TABLE TEST(ID INT PRIMARY KEY, NAME VARCHAR(255))");
-        stat.execute("INSERT INTO TEST VALUES(1, 'Hello')");
-        stat.execute("INSERT INTO TEST VALUES(2, 'World')");
+        stat.execute("CREATE TABLE TEST(ID INT PRIMARY KEY, V INT, NAME VARCHAR(255))");
+        stat.execute("INSERT INTO TEST VALUES(1, 2, 'Hello')");
+        stat.execute("INSERT INTO TEST VALUES(2, 4, 'World')");
         stat.execute("create index idxname on test(name);");
         PreparedStatement prep, prepExe;
 
@@ -1066,7 +1050,7 @@ public class TestPreparedStatement extends TestDb {
         assertContains(plan, ".tableScan");
         rs = prepExe.executeQuery();
         rs.next();
-        assertEquals("World", rs.getString(2));
+        assertEquals("World", rs.getString(3));
         assertFalse(rs.next());
 
         prep.setString(1, "H%");
@@ -1077,7 +1061,7 @@ public class TestPreparedStatement extends TestDb {
         assertContains(plan1, "IDXNAME");
         rs = prepExe.executeQuery();
         rs.next();
-        assertEquals("Hello", rs.getString(2));
+        assertEquals("Hello", rs.getString(3));
         assertFalse(rs.next());
 
         stat.execute("DROP TABLE IF EXISTS TEST");
@@ -1180,7 +1164,7 @@ public class TestPreparedStatement extends TestDb {
         stat.execute("CREATE TABLE T_DECIMAL_10" +
                 "(ID INT PRIMARY KEY,V DECIMAL(20,10))");
         stat.execute("CREATE TABLE T_DATETIME" +
-                "(ID INT PRIMARY KEY,V DATETIME)");
+                "(ID INT PRIMARY KEY,V TIMESTAMP)");
         stat.execute("CREATE TABLE T_BIGINT" +
                 "(ID INT PRIMARY KEY,V DECIMAL(30,0))");
         prep = conn.prepareStatement("INSERT INTO T_INT VALUES(?,?)",
@@ -1378,10 +1362,8 @@ public class TestPreparedStatement extends TestDb {
         assertTrue(rs.getObject(1).equals(Boolean.TRUE));
         assertTrue(rs.getObject(2).equals("Abc"));
         assertTrue(rs.getObject(3).equals(new BigDecimal("10.2")));
-        assertTrue(rs.getObject(4).equals(SysProperties.OLD_RESULT_SET_GET_OBJECT ?
-                (Object) Byte.valueOf((byte) 0xff) : (Object) Integer.valueOf(-1)));
-        assertTrue(rs.getObject(5).equals(SysProperties.OLD_RESULT_SET_GET_OBJECT ?
-                (Object) Short.valueOf(Short.MAX_VALUE) : (Object) Integer.valueOf(Short.MAX_VALUE)));
+        assertTrue(rs.getObject(4).equals(Integer.valueOf(-1)));
+        assertTrue(rs.getObject(5).equals(Integer.valueOf(Short.MAX_VALUE)));
         assertTrue(rs.getObject(6).equals(Integer.MIN_VALUE));
         assertTrue(rs.getObject(7).equals(Long.MAX_VALUE));
         assertTrue(rs.getObject(8).equals(Float.MAX_VALUE));
@@ -1405,12 +1387,10 @@ public class TestPreparedStatement extends TestDb {
                 java.sql.Time.valueOf("23:22:21")));
         assertTrue(rs.getObject(20).equals(
                 new java.math.BigInteger("12345")));
-        Object[] a = (Object[]) rs.getObject(21);
-        assertEquals(a[0], SysProperties.OLD_RESULT_SET_GET_OBJECT ?
-                (Object) Byte.valueOf((byte) 1) : (Object) Integer.valueOf(1));
-        a = (Object[]) rs.getObject(22);
-        assertEquals(a[0], SysProperties.OLD_RESULT_SET_GET_OBJECT ?
-                (Object) Short.valueOf((short) -2) : (Object) Integer.valueOf(-2));
+        Object[] a = (Object[]) ((Array) rs.getObject(21)).getArray();
+        assertEquals(a[0], Integer.valueOf(1));
+        a = (Object[]) ((Array) rs.getObject(22)).getArray();
+        assertEquals(a[0], Integer.valueOf(-2));
 
         // } else if(x instanceof java.io.Reader) {
         // return session.createLob(Value.CLOB,
@@ -1650,18 +1630,25 @@ public class TestPreparedStatement extends TestDb {
         anyParameterCheck(ps, values, expected);
         ps = conn.prepareStatement("SELECT ID FROM TEST INNER JOIN TABLE(X INT=?) T ON TEST.V = T.X");
         anyParameterCheck(ps, values, expected);
-        // Test expression IN(UNNEST(?))
-        ps = conn.prepareStatement("SELECT ID FROM TEST WHERE V IN(UNNEST(?))");
-        assertThrows(ErrorCode.PARAMETER_NOT_SET_1, ps).executeQuery();
-        anyParameterCheck(ps, values, expected);
-        anyParameterCheck(ps, 300, new int[] {30});
-        anyParameterCheck(ps, -5, new int[0]);
         // Test expression = ANY(?)
         ps = conn.prepareStatement("SELECT ID FROM TEST WHERE V = ANY(?)");
         assertThrows(ErrorCode.PARAMETER_NOT_SET_1, ps).executeQuery();
         anyParameterCheck(ps, values, expected);
         anyParameterCheck(ps, 300, new int[] {30});
         anyParameterCheck(ps, -5, new int[0]);
+        ps = conn.prepareStatement("SELECT V, CASE V WHEN = ANY(?) THEN 1 ELSE 2 END FROM"
+                + " (VALUES DATE '2000-01-01', DATE '2010-01-01') T(V) ORDER BY V");
+        ps.setObject(1, new LocalDate[] { LocalDate.of(2000, 1, 1), LocalDate.of(2030, 1, 1) });
+        try (ResultSet rs = ps.executeQuery()) {
+            assertTrue(rs.next());
+            assertEquals(LocalDate.of(2000, 1, 1), rs.getObject(1, LocalDate.class));
+            assertEquals(1, rs.getInt(2));
+            assertTrue(rs.next());
+            assertEquals(LocalDate.of(2010, 1, 1), rs.getObject(1, LocalDate.class));
+            assertEquals(2, rs.getInt(2));
+            assertFalse(rs.next());
+            assertEquals("CASE V WHEN = ANY(?1) THEN 1 ELSE 2 END", rs.getMetaData().getColumnLabel(2));
+        }
         conn.close();
         deleteDb("preparedStatement");
     }
@@ -1721,19 +1708,6 @@ public class TestPreparedStatement extends TestDb {
         stmt.execute("DROP TABLE TEST");
     }
 
-    private void testValueResultSet(Connection conn) throws SQLException {
-        for (int i = 0; i < 2; i++) {
-            try (PreparedStatement stmt = conn.prepareStatement("SELECT TABLE(X INT = (1))")) {
-                ResultSet rs = stmt.executeQuery();
-                while (rs.next()) {
-                    try (ResultSet rs2 = (ResultSet) rs.getObject(1)) {
-                        assertEquals(1, rs2.getMetaData().getColumnCount());
-                    }
-                }
-            }
-        }
-    }
-
     private void testMultipleStatements(Connection conn) throws SQLException {
         assertThrows(ErrorCode.CANNOT_MIX_INDEXED_AND_UNINDEXED_PARAMS, conn).prepareStatement("SELECT ?; SELECT ?1");
         assertThrows(ErrorCode.CANNOT_MIX_INDEXED_AND_UNINDEXED_PARAMS, conn).prepareStatement("SELECT ?1; SELECT ?");
@@ -1767,6 +1741,30 @@ public class TestPreparedStatement extends TestDb {
         stmt.execute("DROP TABLE A, B");
     }
 
+    private void testParameterInSubquery(Connection conn) throws SQLException {
+        Statement stat = conn.createStatement();
+        stat.execute("CREATE TABLE T1(ID1 BIGINT PRIMARY KEY, S INT NOT NULL)");
+        stat.execute("CREATE TABLE T2(ID1 BIGINT REFERENCES T1, ID2 BIGINT)");
+
+        stat.executeUpdate("INSERT INTO T1(ID1, S) VALUES(1, 1), (2, 1)");
+        stat.executeUpdate("INSERT INTO T2(ID1, ID2) VALUES(1, 1), (2, 2)");
+
+        PreparedStatement query = conn.prepareStatement("SELECT ID2 FROM "
+                + "(SELECT * FROM T1 WHERE ID1 IN (SELECT ID1 FROM T2 WHERE ID2 = ?) AND S = ?) T1 "
+                + "JOIN T2 USING(ID1)");
+
+        query.setLong(1, 2L);
+        query.setInt(2, 1);
+        ResultSet rs = query.executeQuery();
+        rs.next();
+        assertEquals(2L, rs.getLong(1));
+        query.setLong(1, 1L);
+        rs = query.executeQuery();
+        rs.next();
+        assertEquals(1L, rs.getLong(1));
+        stat.execute("DROP TABLE T2, T1");
+    }
+
     private void testAfterRollback(Connection conn) throws SQLException {
         try (Statement stat = conn.createStatement()) {
             try {
@@ -1797,6 +1795,41 @@ public class TestPreparedStatement extends TestDb {
                 conn.setAutoCommit(true);
             }
         }
+    }
+
+    private void testUnnestWithArrayParameter(Connection conn) throws SQLException {
+        PreparedStatement prep = conn.prepareStatement(
+                "SELECT * FROM ("
+                + "SELECT * FROM UNNEST(CAST(? AS INTEGER ARRAY)) UNION SELECT * FROM UNNEST(CAST(? AS INTEGER ARRAY))"
+                + ") ORDER BY 1");
+        prep.setObject(1, new Integer[] {1, 2, 3});
+        prep.setObject(2, new Integer[] {3, 4, 5});
+        try (ResultSet rs = prep.executeQuery()) {
+            for (int i = 1; i <= 5; i++) {
+                assertTrue(rs.next());
+                assertEquals(i, rs.getInt(1));
+            }
+            assertFalse(rs.next());
+        }
+        prep = conn.prepareStatement(
+                "SELECT ARRAY_AGG(V) FROM UNNEST(ARRAY[CAST(? AS INTEGER), CAST(? AS INTEGER)]) T(V)");
+        prep.setInt(1, 1);
+        prep.setInt(2, 2);
+        ResultSet rs = prep.executeQuery();
+        assertTrue(rs.next());
+        assertEquals(new Integer[] { 1, 2 }, rs.getObject(1, Integer[].class));
+    }
+
+    private void testDateTimeWithParameter(Connection conn) throws SQLException {
+        Statement stat = conn.createStatement();
+        stat.execute("CREATE TABLE TEST(ID BIGINT PRIMARY KEY, T TIMESTAMP WITH TIME ZONE) "
+                + "AS VALUES (1, CURRENT_TIMESTAMP)");
+        PreparedStatement prep = conn.prepareStatement("SELECT T = ANY(SELECT CAST(? AS TIMESTAMP)) FROM TEST");
+        prep.setObject(1, LocalDateTime.now());
+        ResultSet rs = prep.executeQuery();
+        assertTrue(rs.next());
+        assertFalse(rs.getBoolean(1));
+        stat.execute("DROP TABLE TEST");
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -17,7 +17,6 @@ import java.util.IdentityHashMap;
 import java.util.Random;
 import org.h2.api.IntervalQualifier;
 import org.h2.engine.Constants;
-import org.h2.result.SimpleResult;
 import org.h2.store.DataHandler;
 import org.h2.store.FileStore;
 import org.h2.store.LobStorageInterface;
@@ -32,9 +31,12 @@ import org.h2.value.Value;
 import org.h2.value.ValueArray;
 import org.h2.value.ValueBigint;
 import org.h2.value.ValueBinary;
+import org.h2.value.ValueBlob;
 import org.h2.value.ValueBoolean;
 import org.h2.value.ValueChar;
+import org.h2.value.ValueClob;
 import org.h2.value.ValueDate;
+import org.h2.value.ValueDecfloat;
 import org.h2.value.ValueDouble;
 import org.h2.value.ValueGeometry;
 import org.h2.value.ValueInteger;
@@ -42,11 +44,9 @@ import org.h2.value.ValueInterval;
 import org.h2.value.ValueJavaObject;
 import org.h2.value.ValueJson;
 import org.h2.value.ValueLob;
-import org.h2.value.ValueLobFile;
 import org.h2.value.ValueNull;
 import org.h2.value.ValueNumeric;
 import org.h2.value.ValueReal;
-import org.h2.value.ValueResultSet;
 import org.h2.value.ValueRow;
 import org.h2.value.ValueSmallint;
 import org.h2.value.ValueTime;
@@ -189,6 +189,8 @@ public class TestValueMemory extends TestBase implements DataHandler {
             return ValueDouble.get(random.nextDouble());
         case Value.REAL:
             return ValueReal.get(random.nextFloat());
+        case Value.DECFLOAT:
+            return ValueDecfloat.get(new BigDecimal(random.nextInt()));
         case Value.TIME:
             return ValueTime.fromNanos(randomTimeNanos());
         case Value.TIME_TZ:
@@ -220,8 +222,6 @@ public class TestValueMemory extends TestBase implements DataHandler {
             return ValueArray.get(createArray(), null);
         case Value.ROW:
             return ValueRow.get(createArray());
-        case Value.RESULT_SET:
-            return ValueResultSet.get(new SimpleResult());
         case Value.JAVA_OBJECT:
             return ValueJavaObject.getNoCopy(randomBytes(random.nextInt(100)));
         case Value.UUID:
@@ -316,11 +316,6 @@ public class TestValueMemory extends TestBase implements DataHandler {
     }
 
     @Override
-    public String getLobCompressionAlgorithm(int type) {
-        return "LZF";
-    }
-
-    @Override
     public Object getLobSyncObject() {
         return this;
     }
@@ -383,12 +378,19 @@ public class TestValueMemory extends TestBase implements DataHandler {
         }
 
         @Override
+        public InputStream getInputStream(long lobId, int tableId,
+                long byteCount) throws IOException {
+            // this method is only implemented on the server side of a TCP connection
+            throw new IllegalStateException();
+        }
+
+        @Override
         public boolean isReadOnly() {
             return false;
         }
 
         @Override
-        public ValueLob copyLob(ValueLob old, int tableId, long length) {
+        public ValueLob copyLob(ValueLob old, int tableId) {
             throw new UnsupportedOperationException();
         }
 
@@ -398,11 +400,11 @@ public class TestValueMemory extends TestBase implements DataHandler {
         }
 
         @Override
-        public ValueLob createBlob(InputStream in, long maxLength) {
+        public ValueBlob createBlob(InputStream in, long maxLength) {
             // need to use a temp file, because the input stream could come from
             // the same database, which would create a weird situation (trying
             // to read a block while writing something)
-            return ValueLobFile.createTempBlob(in, maxLength, TestValueMemory.this);
+            return ValueBlob.createTempBlob(in, maxLength, TestValueMemory.this);
         }
 
         /**
@@ -413,18 +415,11 @@ public class TestValueMemory extends TestBase implements DataHandler {
          * @return the LOB
          */
         @Override
-        public ValueLob createClob(Reader reader, long maxLength) {
+        public ValueClob createClob(Reader reader, long maxLength) {
             // need to use a temp file, because the input stream could come from
             // the same database, which would create a weird situation (trying
             // to read a block while writing something)
-            return ValueLobFile.createTempClob(reader, maxLength, TestValueMemory.this);
+            return ValueClob.createTempClob(reader, maxLength, TestValueMemory.this);
         }
-
-        @Override
-        public void init() {
-            // nothing to do
-        }
-
     }
-
 }

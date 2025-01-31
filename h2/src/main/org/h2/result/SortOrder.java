@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,10 +10,11 @@ import java.util.Collections;
 import java.util.Comparator;
 
 import org.h2.command.query.QueryOrderBy;
-import org.h2.engine.Session;
-import org.h2.engine.SysProperties;
+import org.h2.engine.Database;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionColumn;
+import org.h2.mode.DefaultNullOrdering;
 import org.h2.table.Column;
 import org.h2.table.TableFilter;
 import org.h2.util.Utils;
@@ -24,7 +25,7 @@ import org.h2.value.ValueRow;
 /**
  * A sort order represents an ORDER BY clause in a query.
  */
-public class SortOrder implements Comparator<Value[]> {
+public final class SortOrder implements Comparator<Value[]> {
 
     /**
      * This bit mask means the values should be sorted in ascending order.
@@ -48,34 +49,7 @@ public class SortOrder implements Comparator<Value[]> {
      */
     public static final int NULLS_LAST = 4;
 
-    /**
-     * The default comparison result for NULL, either 1 or -1.
-     */
-    private static final int DEFAULT_NULL_SORT;
-
-    /**
-     * The default NULLs sort order bit for ASC indexes.
-     */
-    private static final int DEFAULT_ASC_NULLS;
-
-    /**
-     * The default NULLs sort order bit for DESC indexes.
-     */
-    private static final int DEFAULT_DESC_NULLS;
-
-    static {
-        if (SysProperties.SORT_NULLS_HIGH) {
-            DEFAULT_NULL_SORT = 1;
-            DEFAULT_ASC_NULLS = NULLS_LAST;
-            DEFAULT_DESC_NULLS = NULLS_FIRST;
-        } else { // default
-            DEFAULT_NULL_SORT = -1;
-            DEFAULT_ASC_NULLS = NULLS_FIRST;
-            DEFAULT_DESC_NULLS = NULLS_LAST;
-        }
-    }
-
-    private final Session session;
+    private final SessionLocal session;
 
     /**
      * The column indexes of the order by expressions within the query.
@@ -93,6 +67,33 @@ public class SortOrder implements Comparator<Value[]> {
     private final ArrayList<QueryOrderBy> orderList;
 
     /**
+     * Construct a new sort order object with specified sort types.
+     *
+     * @param session the session
+     * @param sortTypes sort types of all columns
+     *
+     * @return a sort order
+     */
+    public static SortOrder ofSortTypes(SessionLocal session, int[] sortTypes) {
+        int length = sortTypes.length;
+        int[] queryColumnIndexes = new int[length];
+        for (int i = 0; i < length; i++) {
+            queryColumnIndexes[i] = i;
+        }
+        return new SortOrder(session, queryColumnIndexes, sortTypes, null);
+    }
+
+    /**
+     * Construct a new sort order object with default sort directions.
+     *
+     * @param session the session
+     * @param queryColumnIndexes the column index list
+     */
+    public SortOrder(SessionLocal session, int[] queryColumnIndexes) {
+        this (session, queryColumnIndexes, new int[queryColumnIndexes.length], null);
+    }
+
+    /**
      * Construct a new sort order object.
      *
      * @param session the session
@@ -100,7 +101,8 @@ public class SortOrder implements Comparator<Value[]> {
      * @param sortType the sort order bit masks
      * @param orderList the original query order list (if this is a query)
      */
-    public SortOrder(Session session, int[] queryColumnIndexes, int[] sortType, ArrayList<QueryOrderBy> orderList) {
+    public SortOrder(SessionLocal session, int[] queryColumnIndexes, int[] sortType,
+            ArrayList<QueryOrderBy> orderList) {
         this.session = session;
         this.queryColumnIndexes = queryColumnIndexes;
         this.sortTypes = sortType;
@@ -150,26 +152,6 @@ public class SortOrder implements Comparator<Value[]> {
     }
 
     /**
-     * Compare two expressions where one of them is NULL.
-     *
-     * @param aNull whether the first expression is null
-     * @param sortType the sort bit mask to use
-     * @return the result of the comparison (-1 meaning the first expression
-     *         should appear before the second, 0 if they are equal)
-     */
-    public static int compareNull(boolean aNull, int sortType) {
-        if ((sortType & NULLS_FIRST) != 0) {
-            return aNull ? -1 : 1;
-        } else if ((sortType & NULLS_LAST) != 0) {
-            return aNull ? 1 : -1;
-        } else {
-            // see also JdbcDatabaseMetaData.nullsAreSorted*
-            int comp = aNull ? DEFAULT_NULL_SORT : -DEFAULT_NULL_SORT;
-            return (sortType & DESCENDING) == 0 ? comp : -comp;
-        }
-    }
-
-    /**
      * Compare two expression lists.
      *
      * @param a the first expression list
@@ -178,7 +160,23 @@ public class SortOrder implements Comparator<Value[]> {
      */
     @Override
     public int compare(Value[] a, Value[] b) {
-        for (int i = 0, len = queryColumnIndexes.length; i < len; i++) {
+        return compareImpl(a, b, queryColumnIndexes.length);
+    }
+
+    /**
+     * Compare two expression lists.
+     *
+     * @param a the first expression list
+     * @param b the second expression list
+     * @param count number of columns to compare
+     * @return the result of the comparison
+     */
+    public int compare(Value[] a, Value[] b, int count) {
+        return compareImpl(a, b, count);
+    }
+
+    private int compareImpl(Value[] a, Value[] b, int count) {
+        for (int i = 0; i < count; i++) {
             int idx = queryColumnIndexes[i];
             int type = sortTypes[i];
             Value ao = a[idx];
@@ -188,7 +186,7 @@ public class SortOrder implements Comparator<Value[]> {
                 if (aNull == bNull) {
                     continue;
                 }
-                return compareNull(aNull, type);
+                return session.getDatabase().getDefaultNullOrdering().compareNull(aNull, type);
             }
             int comp = session.compare(ao, bo);
             if (comp != 0) {
@@ -211,25 +209,17 @@ public class SortOrder implements Comparator<Value[]> {
      * Sort a list of rows using offset and limit.
      *
      * @param rows the list of rows
-     * @param offset the offset
-     * @param limit the limit
+     * @param fromInclusive the start index, inclusive
+     * @param toExclusive the end index, exclusive
      */
-    public void sort(ArrayList<Value[]> rows, int offset, int limit) {
-        int rowsSize = rows.size();
-        if (rowsSize == 0 || offset >= rowsSize || limit == 0) {
-            return;
-        }
-        if (offset < 0) {
-            offset = 0;
-        }
-        limit = Math.min(limit, rowsSize - offset);
-        if (limit == 1 && offset == 0) {
+    public void sort(ArrayList<Value[]> rows, int fromInclusive, int toExclusive) {
+        if (toExclusive == 1 && fromInclusive == 0) {
             rows.set(0, Collections.min(rows, this));
             return;
         }
         Value[][] arr = rows.toArray(new Value[0][]);
-        Utils.sortTopN(arr, offset, limit, this);
-        for (int i = 0, end = Math.min(offset + limit, rowsSize); i < end; i++) {
+        Utils.sortTopN(arr, fromInclusive, toExclusive, this);
+        for (int i = fromInclusive; i < toExclusive; i++) {
             rows.set(i, arr[i]);
         }
     }
@@ -299,17 +289,36 @@ public class SortOrder implements Comparator<Value[]> {
     }
 
     /**
-     * Returns sort order bit masks with {@link #NULLS_FIRST} or {@link #NULLS_LAST}
-     * explicitly set, depending on {@link SysProperties#SORT_NULLS_HIGH}.
+     * Returns sort order bit masks with {@link SortOrder#NULLS_FIRST} or
+     * {@link SortOrder#NULLS_LAST} explicitly set.
      *
-     * @return bit masks with either {@link #NULLS_FIRST} or {@link #NULLS_LAST} explicitly set.
+     * @return bit masks with either {@link SortOrder#NULLS_FIRST} or {@link SortOrder#NULLS_LAST}
+     *         explicitly set.
      */
-    public int[] getSortTypesWithNullPosition() {
-        final int[] sortTypes = this.sortTypes.clone();
-        for (int i=0, length = sortTypes.length; i<length; i++) {
-            sortTypes[i] = addExplicitNullPosition(sortTypes[i]);
+    public int[] getSortTypesWithNullOrdering() {
+        return addNullOrdering(session.getDatabase(), sortTypes.clone());
+    }
+
+    /**
+     * Add explicit {@link SortOrder#NULLS_FIRST} or {@link SortOrder#NULLS_LAST} where they
+     * aren't already specified.
+     *
+     * @param database
+     *            the database
+     * @param sortTypes
+     *            bit masks
+     * @return the specified array with possibly modified bit masks
+     */
+    public static int[] addNullOrdering(Database database, int[] sortTypes) {
+        DefaultNullOrdering defaultNullOrdering = database.getDefaultNullOrdering();
+        for (int i = 0, length = sortTypes.length; i < length; i++) {
+            sortTypes[i] = defaultNullOrdering.addExplicitNullOrdering(sortTypes[i]);
         }
         return sortTypes;
+    }
+
+    public static int inverse(int sortTypeWithNull) {
+        return sortTypeWithNull ^ (DESCENDING | NULLS_FIRST | NULLS_LAST);
     }
 
     /**
@@ -321,18 +330,4 @@ public class SortOrder implements Comparator<Value[]> {
         return (o1, o2) -> compare(((ValueRow) o1).getList(), ((ValueRow) o2).getList());
     }
 
-    /**
-     * Returns a sort type bit mask with {@link #NULLS_FIRST} or {@link #NULLS_LAST}
-     * explicitly set, depending on {@link SysProperties#SORT_NULLS_HIGH}.
-     *
-     * @param sortType sort type bit mask
-     * @return bit mask with either {@link #NULLS_FIRST} or {@link #NULLS_LAST} explicitly set.
-     */
-    public static int addExplicitNullPosition(int sortType) {
-        if ((sortType & (NULLS_FIRST | NULLS_LAST)) == 0) {
-            return sortType | ((sortType & DESCENDING) == 0 ? DEFAULT_ASC_NULLS : DEFAULT_DESC_NULLS);
-        } else {
-            return sortType;
-        }
-    }
 }

@@ -1,12 +1,13 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.index;
 
+import org.h2.api.ErrorCode;
 import org.h2.command.query.AllColumnsForPlan;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.result.Row;
 import org.h2.result.SearchRow;
@@ -31,10 +32,14 @@ public class RangeIndex extends VirtualTableIndex {
     }
 
     @Override
-    public Cursor find(Session session, SearchRow first, SearchRow last) {
+    public Cursor find(SessionLocal session, SearchRow first, SearchRow last, boolean reverse) {
+        assert !reverse;
         long min = rangeTable.getMin(session);
         long max = rangeTable.getMax(session);
         long step = rangeTable.getStep(session);
+        if (step == 0L) {
+            throw DbException.get(ErrorCode.STEP_SIZE_MUST_NOT_BE_ZERO);
+        }
         if (first != null) {
             try {
                 long v = first.getValue(0).getLong();
@@ -67,9 +72,9 @@ public class RangeIndex extends VirtualTableIndex {
     }
 
     @Override
-    public double getCost(Session session, int[] masks,
+    public double getCost(SessionLocal session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
-            AllColumnsForPlan allColumnsSet) {
+            AllColumnsForPlan allColumnsSet, boolean isSelectCommand) {
         return 1d;
     }
 
@@ -84,12 +89,16 @@ public class RangeIndex extends VirtualTableIndex {
     }
 
     @Override
-    public Cursor findFirstOrLast(Session session, boolean first) {
+    public Cursor findFirstOrLast(SessionLocal session, boolean first) {
         long min = rangeTable.getMin(session);
         long max = rangeTable.getMax(session);
         long step = rangeTable.getStep(session);
-        return new SingleRowCursor((step > 0 ? min <= max : min >= max)
-                ? Row.get(new Value[]{ ValueBigint.get(first ^ min >= max ? min : max) }, 1) : null);
+        if (step == 0L) {
+            throw DbException.get(ErrorCode.STEP_SIZE_MUST_NOT_BE_ZERO);
+        }
+        return (step > 0 ? min <= max : min >= max)
+                ? new SingleRowCursor(Row.get(new Value[] { ValueBigint.get(first ^ min >= max ? min : max) }, 1))
+                : SingleRowCursor.EMPTY;
     }
 
     @Override

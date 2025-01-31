@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -726,8 +726,7 @@ EXPLAIN SELECT * FROM TEST ORDER BY V;
 >> SELECT "PUBLIC"."TEST"."ID", "PUBLIC"."TEST"."V" FROM "PUBLIC"."TEST" /* PUBLIC.CONSTRAINT_INDEX_2 */ ORDER BY 2 /* index sorted */
 
 EXPLAIN SELECT * FROM TEST ORDER BY V FOR UPDATE;
-#+mvStore#>> SELECT "PUBLIC"."TEST"."ID", "PUBLIC"."TEST"."V" FROM "PUBLIC"."TEST" /* PUBLIC.CONSTRAINT_INDEX_2 */ ORDER BY 2 FOR UPDATE
-#-mvStore#>> SELECT "PUBLIC"."TEST"."ID", "PUBLIC"."TEST"."V" FROM "PUBLIC"."TEST" /* PUBLIC.CONSTRAINT_INDEX_2 */ ORDER BY 2 FOR UPDATE /* index sorted */
+>> SELECT "PUBLIC"."TEST"."ID", "PUBLIC"."TEST"."V" FROM "PUBLIC"."TEST" /* PUBLIC.CONSTRAINT_INDEX_2 */ ORDER BY 2 FOR UPDATE
 
 DROP TABLE TEST;
 > ok
@@ -1109,3 +1108,184 @@ EXPLAIN SELECT (VALUES 1, RAND());
 
 EXPLAIN SELECT X FROM SYSTEM_RANGE(1, 10) ORDER BY X, (1+1), -X;
 >> SELECT "X" FROM SYSTEM_RANGE(1, 10) /* range index */ ORDER BY 1, - "X"
+
+
+CREATE TABLE T1 (
+    T1_ID BIGINT PRIMARY KEY
+);
+> ok
+
+INSERT INTO T1 VALUES 1, 2, 3;
+> update count: 3
+
+CREATE TABLE T2 (
+    T2_ID BIGINT PRIMARY KEY,
+    T1_ID BIGINT NOT NULL REFERENCES T1
+);
+> ok
+
+INSERT INTO T2 VALUES (1, 1), (2, 1), (3, 2), (4, 3);
+> update count: 4
+
+SELECT * FROM (SELECT * FROM T1 FETCH FIRST 2 ROWS ONLY) T1 JOIN T2 USING (T1_ID);
+> T1_ID T2_ID
+> ----- -----
+> 1     1
+> 1     2
+> 2     3
+> rows: 3
+
+
+DROP TABLE T2, T1;
+> ok
+
+EXECUTE IMMEDIATE 'CREATE TABLE TEST AS SELECT C1 FROM (SELECT ' || (SELECT LISTAGG('1 C' || X) FROM SYSTEM_RANGE(1, 16384)) || ')';
+> ok
+
+DROP TABLE TEST;
+> ok
+
+EXECUTE IMMEDIATE 'CREATE TABLE TEST AS SELECT C1 FROM (SELECT ' || (SELECT LISTAGG('1 C' || X) FROM SYSTEM_RANGE(1, 16385)) || ')';
+> exception TOO_MANY_COLUMNS_1
+
+CREATE TABLE TEST(A INT, B INT);
+> ok
+
+CREATE INDEX TEST_IDX ON TEST(A, B);
+> ok
+
+INSERT INTO TEST VALUES (1, 1), (1, 2), (2, 1), (2, 2);
+> update count: 4
+
+SELECT A, 1 AS X, B FROM TEST ORDER BY A, X, B DESC;
+> A X B
+> - - -
+> 1 1 2
+> 1 1 1
+> 2 1 2
+> 2 1 1
+> rows (ordered): 4
+
+EXPLAIN SELECT A, 1 AS X, B FROM TEST ORDER BY A, X, B DESC;
+>> SELECT "A", 1 AS "X", "B" FROM "PUBLIC"."TEST" /* PUBLIC.TEST_IDX */ ORDER BY 1, 2, 3 DESC /* index sorted: 1 of 3 columns */
+
+DROP TABLE TEST;
+> ok
+
+SELECT X FROM SYSTEM_RANGE(1, 2) ORDER BY X DESC FETCH FIRST 0xFFFFFFFF ROWS ONLY;
+> X
+> -
+> 2
+> 1
+> rows (ordered): 2
+
+SELECT ((SELECT 1 X) EXCEPT (SELECT 1 Y)) T;
+> T
+> ----
+> null
+> rows: 1
+
+create table test(x0 int, x1 int);
+> ok
+
+select * from
+    (select * from
+        (select * from
+            (select * from
+                (select * from
+                    (select * from
+                        (select * from
+                            (select * from
+                                (select * from test as t399 where x0 < 1 and x0 >= x0 or null <= -1) as t398
+                            where -1 is not distinct from -1) as t397
+                        where 3 is distinct from 2) as t396
+                    where null is distinct from -1) as t395
+                where 3 is distinct from -1 or null = x1) as t394
+            where x0 is distinct from null) as t393
+        where x0 >= null and -1 <= 1 and 3 is not distinct from -1) as t392
+    where -1 >= 3) as t391
+where -1 is distinct from -1 or 2 is distinct from x0;
+> X0 X1
+> -- --
+> rows: 0
+
+drop table test;
+> ok
+
+SELECT X, FROM (VALUES 1) T(X);
+> exception SYNTAX_ERROR_2
+
+CREATE TABLE TEST(A INT, B INT, C INT);
+> ok
+
+INSERT INTO TEST SELECT 1, X, X FROM SYSTEM_RANGE(1, 10);
+> update count: 10
+
+CREATE INDEX I1 ON TEST(A, B);
+> ok
+
+CREATE INDEX I2 ON TEST(A, C);
+> ok
+
+EXPLAIN SELECT * FROM TEST WHERE A = 1 AND B = 1 ORDER BY A, B, C;
+>> SELECT "PUBLIC"."TEST"."A", "PUBLIC"."TEST"."B", "PUBLIC"."TEST"."C" FROM "PUBLIC"."TEST" /* PUBLIC.I1: A = 1 AND B = 1 */ WHERE ("A" = 1) AND ("B" = 1) ORDER BY 1, 2, 3 /* index sorted: 2 of 3 columns */
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(A INT, B INT);
+> ok
+
+CREATE INDEX IA ON TEST(A);
+> ok
+
+INSERT INTO TEST VALUES (1, 2), (1, 1), (2, 3), (2, 3);
+> update count: 4
+
+EXPLAIN SELECT * FROM TEST ORDER BY A, B OFFSET 1 ROW FETCH NEXT 1 ROW WITH TIES;
+>> SELECT "PUBLIC"."TEST"."A", "PUBLIC"."TEST"."B" FROM "PUBLIC"."TEST" /* PUBLIC.IA */ ORDER BY 1, 2 OFFSET 1 ROW FETCH NEXT ROW WITH TIES /* index sorted: 1 of 2 columns */
+
+SELECT * FROM TEST ORDER BY A, B OFFSET 1 ROW FETCH NEXT 1 ROW WITH TIES;
+> A B
+> - -
+> 1 2
+> rows (ordered): 1
+
+SELECT * FROM TEST ORDER BY A, B OFFSET 2 ROWS FETCH NEXT 1 ROW WITH TIES;
+> A B
+> - -
+> 2 3
+> 2 3
+> rows (ordered): 2
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(A INT);
+> ok
+
+CREATE INDEX TEST_A_IDX ON TEST(A);
+> ok
+
+INSERT INTO TEST VALUES 1, 2, 1, 2, 5;
+> update count: 5
+
+SELECT * FROM TEST WHERE A <= 2 ORDER BY A;
+> A
+> -
+> 1
+> 1
+> 2
+> 2
+> rows (ordered): 4
+
+SELECT * FROM TEST WHERE A >= 2 ORDER BY A DESC;
+> A
+> -
+> 5
+> 2
+> 2
+> rows (ordered): 3
+
+DROP TABLE TEST;
+> ok

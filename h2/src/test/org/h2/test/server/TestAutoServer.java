@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -44,15 +44,16 @@ public class TestAutoServer extends TestDb {
         testLinkedLocalTablesWithAutoServerReconnect();
     }
 
-    private void testUnsupportedCombinations() throws SQLException {
+    private void testUnsupportedCombinations() {
         String[] urls = {
                 "jdbc:h2:" + getTestName() + ";file_lock=no;auto_server=true",
                 "jdbc:h2:" + getTestName() + ";file_lock=serialized;auto_server=true",
                 "jdbc:h2:" + getTestName() + ";access_mode_data=r;auto_server=true",
-                "jdbc:h2:mem:" + getTestName() + ";auto_server=true"
+                "jdbc:h2:" + getTestName() + ";AUTO_SERVER=TRUE;DB_CLOSE_ON_EXIT=FALSE",
+                "jdbc:h2:mem:" + getTestName() + ";AUTO_SERVER=TRUE",
         };
         for (String url : urls) {
-            assertThrows(SQLException.class, this).getConnection(url);
+            assertThrows(SQLException.class, () -> getConnection(url));
             try {
                 getConnection(url);
                 fail(url);

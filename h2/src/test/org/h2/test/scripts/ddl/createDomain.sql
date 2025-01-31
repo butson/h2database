@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -18,16 +18,16 @@ CREATE DOMAIN S2.D2 AS TIMESTAMP WITH TIME ZONE ON UPDATE CURRENT_TIMESTAMP;
 CREATE TABLE TEST(C1 S1.D1, C2 S2.D2);
 > ok
 
-SELECT COLUMN_NAME, DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, COLUMN_DEFAULT, COLUMN_TYPE, COLUMN_ON_UPDATE
+SELECT COLUMN_NAME, DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, COLUMN_DEFAULT, COLUMN_ON_UPDATE
     FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TEST' ORDER BY ORDINAL_POSITION;
-> COLUMN_NAME DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME COLUMN_DEFAULT COLUMN_TYPE                           COLUMN_ON_UPDATE
-> ----------- -------------- ------------- ----------- -------------- ------------------------------------- -----------------
-> C1          SCRIPT         S1            D1          1              "S1"."D1" DEFAULT 1                   null
-> C2          SCRIPT         S2            D2          null           "S2"."D2" ON UPDATE CURRENT_TIMESTAMP CURRENT_TIMESTAMP
+> COLUMN_NAME DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME COLUMN_DEFAULT COLUMN_ON_UPDATE
+> ----------- -------------- ------------- ----------- -------------- ----------------
+> C1          SCRIPT         S1            D1          null           null
+> C2          SCRIPT         S2            D2          null           null
 > rows (ordered): 2
 
-SELECT DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, DOMAIN_DEFAULT, DOMAIN_ON_UPDATE, TYPE_NAME FROM INFORMATION_SCHEMA.DOMAINS;
-> DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME DOMAIN_DEFAULT DOMAIN_ON_UPDATE  TYPE_NAME
+SELECT DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, DOMAIN_DEFAULT, DOMAIN_ON_UPDATE, DATA_TYPE FROM INFORMATION_SCHEMA.DOMAINS;
+> DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME DOMAIN_DEFAULT DOMAIN_ON_UPDATE  DATA_TYPE
 > -------------- ------------- ----------- -------------- ----------------- ------------------------
 > SCRIPT         S1            D1          1              null              INTEGER
 > SCRIPT         S2            D2          null           CURRENT_TIMESTAMP TIMESTAMP WITH TIME ZONE
@@ -90,20 +90,20 @@ ALTER DOMAIN IF EXISTS X DROP CONSTRAINT D1;
 ALTER DOMAIN X DROP CONSTRAINT IF EXISTS D1;
 > exception DOMAIN_NOT_FOUND_1
 
-SCRIPT NOPASSWORDS NOSETTINGS;
+SCRIPT NOPASSWORDS NOSETTINGS NOVERSION;
 > SCRIPT
 > -------------------------------------------------------------------------------------------
+> CREATE USER IF NOT EXISTS "SA" PASSWORD '' ADMIN;
+> CREATE DOMAIN "PUBLIC"."D" AS INTEGER;
+> CREATE MEMORY TABLE "PUBLIC"."TEST"( "C" "PUBLIC"."D" );
 > -- 0 +/- SELECT COUNT(*) FROM PUBLIC.TEST;
 > ALTER DOMAIN "PUBLIC"."D" ADD CONSTRAINT "PUBLIC"."CONSTRAINT_4" CHECK(VALUE <> 0) NOCHECK;
-> CREATE DOMAIN "PUBLIC"."D" AS INT;
-> CREATE MEMORY TABLE "PUBLIC"."TEST"( "C" "PUBLIC"."D" );
-> CREATE USER IF NOT EXISTS "SA" PASSWORD '' ADMIN;
-> rows: 5
+> rows (ordered): 5
 
-SELECT CONSTRAINT_NAME, DOMAIN_NAME, SQL FROM INFORMATION_SCHEMA.DOMAIN_CONSTRAINTS;
-> CONSTRAINT_NAME DOMAIN_NAME SQL
-> --------------- ----------- ------------------------------------------------------------------------------------------
-> CONSTRAINT_4    D           ALTER DOMAIN "PUBLIC"."D" ADD CONSTRAINT "PUBLIC"."CONSTRAINT_4" CHECK(VALUE <> 0) NOCHECK
+SELECT CONSTRAINT_NAME, DOMAIN_NAME FROM INFORMATION_SCHEMA.DOMAIN_CONSTRAINTS;
+> CONSTRAINT_NAME DOMAIN_NAME
+> --------------- -----------
+> CONSTRAINT_4    D
 > rows: 1
 
 TABLE INFORMATION_SCHEMA.CHECK_CONSTRAINTS;
@@ -127,20 +127,20 @@ DROP DOMAIN D RESTRICT;
 DROP DOMAIN D CASCADE;
 > ok
 
-SCRIPT NOPASSWORDS NOSETTINGS;
+SCRIPT NOPASSWORDS NOSETTINGS NOVERSION;
 > SCRIPT
 > -------------------------------------------------------------------------------------------
-> -- 1 +/- SELECT COUNT(*) FROM PUBLIC.TEST;
-> ALTER TABLE "PUBLIC"."TEST" ADD CONSTRAINT "PUBLIC"."CONSTRAINT_2" CHECK("C" <> 0) NOCHECK;
-> CREATE MEMORY TABLE "PUBLIC"."TEST"( "C" INT );
 > CREATE USER IF NOT EXISTS "SA" PASSWORD '' ADMIN;
+> CREATE MEMORY TABLE "PUBLIC"."TEST"( "C" INTEGER );
+> -- 1 +/- SELECT COUNT(*) FROM PUBLIC.TEST;
 > INSERT INTO "PUBLIC"."TEST" VALUES (-1);
-> rows: 5
+> ALTER TABLE "PUBLIC"."TEST" ADD CONSTRAINT "PUBLIC"."CONSTRAINT_2" CHECK("C" <> 0) NOCHECK;
+> rows (ordered): 5
 
-SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE, TABLE_NAME, SQL FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS;
-> CONSTRAINT_NAME CONSTRAINT_TYPE TABLE_NAME SQL
-> --------------- --------------- ---------- ------------------------------------------------------------------------------------------
-> CONSTRAINT_2    CHECK           TEST       ALTER TABLE "PUBLIC"."TEST" ADD CONSTRAINT "PUBLIC"."CONSTRAINT_2" CHECK("C" <> 0) NOCHECK
+SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE, TABLE_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS;
+> CONSTRAINT_NAME CONSTRAINT_TYPE TABLE_NAME
+> --------------- --------------- ----------
+> CONSTRAINT_2    CHECK           TEST
 > rows: 1
 
 TABLE INFORMATION_SCHEMA.CHECK_CONSTRAINTS;
@@ -170,14 +170,14 @@ CREATE DOMAIN D3 AS D1 CHECK (VALUE >= 3);
 CREATE DOMAIN D4 AS D1 DEFAULT 4 CHECK (VALUE >= 4);
 > ok
 
-SELECT DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, DOMAIN_DEFAULT, DOMAIN_ON_UPDATE, DATA_TYPE, PRECISION, SCALE, TYPE_NAME,
+SELECT DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, DOMAIN_DEFAULT, DOMAIN_ON_UPDATE, DATA_TYPE, NUMERIC_PRECISION,
     PARENT_DOMAIN_CATALOG, PARENT_DOMAIN_SCHEMA, PARENT_DOMAIN_NAME FROM INFORMATION_SCHEMA.DOMAINS WHERE DOMAIN_SCHEMA = 'PUBLIC';
-> DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME DOMAIN_DEFAULT DOMAIN_ON_UPDATE DATA_TYPE PRECISION SCALE TYPE_NAME PARENT_DOMAIN_CATALOG PARENT_DOMAIN_SCHEMA PARENT_DOMAIN_NAME
-> -------------- ------------- ----------- -------------- ---------------- --------- --------- ----- --------- --------------------- -------------------- ------------------
-> SCRIPT         PUBLIC        D1          1              null             4         10        0     INTEGER   null                  null                 null
-> SCRIPT         PUBLIC        D2          2              null             4         10        0     INTEGER   SCRIPT                PUBLIC               D1
-> SCRIPT         PUBLIC        D3          1              null             4         10        0     INTEGER   SCRIPT                PUBLIC               D1
-> SCRIPT         PUBLIC        D4          4              null             4         10        0     INTEGER   SCRIPT                PUBLIC               D1
+> DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME DOMAIN_DEFAULT DOMAIN_ON_UPDATE DATA_TYPE NUMERIC_PRECISION PARENT_DOMAIN_CATALOG PARENT_DOMAIN_SCHEMA PARENT_DOMAIN_NAME
+> -------------- ------------- ----------- -------------- ---------------- --------- ----------------- --------------------- -------------------- ------------------
+> SCRIPT         PUBLIC        D1          1              null             INTEGER   32                null                  null                 null
+> SCRIPT         PUBLIC        D2          2              null             INTEGER   32                SCRIPT                PUBLIC               D1
+> SCRIPT         PUBLIC        D3          null           null             INTEGER   32                SCRIPT                PUBLIC               D1
+> SCRIPT         PUBLIC        D4          4              null             INTEGER   32                SCRIPT                PUBLIC               D1
 > rows: 4
 
 SELECT DOMAIN_NAME, CHECK_CLAUSE FROM INFORMATION_SCHEMA.DOMAIN_CONSTRAINTS D JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS C
@@ -199,13 +199,13 @@ DROP DOMAIN D1;
 DROP DOMAIN D1 CASCADE;
 > ok
 
-SELECT DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, DOMAIN_DEFAULT, DOMAIN_ON_UPDATE, DATA_TYPE, PRECISION, SCALE, TYPE_NAME,
+SELECT DOMAIN_CATALOG, DOMAIN_SCHEMA, DOMAIN_NAME, DOMAIN_DEFAULT, DOMAIN_ON_UPDATE, DATA_TYPE, NUMERIC_PRECISION,
     PARENT_DOMAIN_CATALOG, PARENT_DOMAIN_SCHEMA, PARENT_DOMAIN_NAME FROM INFORMATION_SCHEMA.DOMAINS WHERE DOMAIN_SCHEMA = 'PUBLIC';
-> DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME DOMAIN_DEFAULT DOMAIN_ON_UPDATE DATA_TYPE PRECISION SCALE TYPE_NAME PARENT_DOMAIN_CATALOG PARENT_DOMAIN_SCHEMA PARENT_DOMAIN_NAME
-> -------------- ------------- ----------- -------------- ---------------- --------- --------- ----- --------- --------------------- -------------------- ------------------
-> SCRIPT         PUBLIC        D2          2              null             4         10        0     INTEGER   null                  null                 null
-> SCRIPT         PUBLIC        D3          1              null             4         10        0     INTEGER   null                  null                 null
-> SCRIPT         PUBLIC        D4          4              null             4         10        0     INTEGER   null                  null                 null
+> DOMAIN_CATALOG DOMAIN_SCHEMA DOMAIN_NAME DOMAIN_DEFAULT DOMAIN_ON_UPDATE DATA_TYPE NUMERIC_PRECISION PARENT_DOMAIN_CATALOG PARENT_DOMAIN_SCHEMA PARENT_DOMAIN_NAME
+> -------------- ------------- ----------- -------------- ---------------- --------- ----------------- --------------------- -------------------- ------------------
+> SCRIPT         PUBLIC        D2          2              null             INTEGER   32                null                  null                 null
+> SCRIPT         PUBLIC        D3          1              null             INTEGER   32                null                  null                 null
+> SCRIPT         PUBLIC        D4          4              null             INTEGER   32                null                  null                 null
 > rows: 3
 
 SELECT DOMAIN_NAME, CHECK_CLAUSE FROM INFORMATION_SCHEMA.DOMAIN_CONSTRAINTS D JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS C
@@ -247,4 +247,13 @@ DROP DOMAIN D3;
 > ok
 
 DROP DOMAIN D2;
+> ok
+
+CREATE DOMAIN D AS CHARACTER VARYING CHECK (VALUE LIKE '%1%');
+> ok
+
+ALTER DOMAIN D ADD CHECK (VALUE ILIKE '%2%');
+> ok
+
+DROP DOMAIN D;
 > ok

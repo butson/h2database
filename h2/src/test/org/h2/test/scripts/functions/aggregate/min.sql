@@ -1,4 +1,4 @@
--- Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -12,8 +12,8 @@ insert into test values (1), (2), (3), (4), (5), (6), (7), (8), (9), (10), (11),
 > update count: 12
 
 select min(v), min(v) filter (where v >= 4) from test where v >= 2;
-> MIN(V) MIN(V) FILTER (WHERE (V >= 4))
-> ------ ------------------------------
+> MIN(V) MIN(V) FILTER (WHERE V >= 4)
+> ------ ----------------------------
 > 2      4
 > rows: 1
 
@@ -21,14 +21,14 @@ create index test_idx on test(v);
 > ok
 
 select min(v), min(v) filter (where v >= 4) from test where v >= 2;
-> MIN(V) MIN(V) FILTER (WHERE (V >= 4))
-> ------ ------------------------------
+> MIN(V) MIN(V) FILTER (WHERE V >= 4)
+> ------ ----------------------------
 > 2      4
 > rows: 1
 
 select min(v), min(v) filter (where v >= 4) from test;
-> MIN(V) MIN(V) FILTER (WHERE (V >= 4))
-> ------ ------------------------------
+> MIN(V) MIN(V) FILTER (WHERE V >= 4)
+> ------ ----------------------------
 > 1      4
 > rows: 1
 
@@ -73,3 +73,45 @@ SELECT MIN(X) FROM SYSTEM_RANGE(1, 2, -1);
 
 SELECT MIN(X) FROM SYSTEM_RANGE(2, 1, -1);
 >> 1
+
+CREATE TABLE TEST(ID INT);
+> ok
+
+INSERT INTO TEST VALUES 10, 40, 20, 50;
+> update count: 4
+
+SELECT MIN(_ROWID_) FROM TEST;
+>> 1
+
+EXPLAIN SELECT MIN(_ROWID_) FROM TEST;
+>> SELECT MIN(_ROWID_) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */ /* direct lookup */
+
+DELETE FROM TEST WHERE ID IN (10, 50);
+> update count: 2
+
+SELECT MIN(_ROWID_) FROM TEST;
+>> 2
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(ID INT PRIMARY KEY);
+> ok
+
+INSERT INTO TEST VALUES 10, 40, 20, 50;
+> update count: 4
+
+SELECT MIN(_ROWID_) FROM TEST;
+>> 10
+
+EXPLAIN SELECT MIN(_ROWID_) FROM TEST;
+>> SELECT MIN(_ROWID_) FROM "PUBLIC"."TEST" /* PUBLIC.TEST.tableScan */ /* direct lookup */
+
+DELETE FROM TEST WHERE ID IN (10, 50);
+> update count: 2
+
+SELECT MIN(_ROWID_) FROM TEST;
+>> 20
+
+DROP TABLE TEST;
+> ok

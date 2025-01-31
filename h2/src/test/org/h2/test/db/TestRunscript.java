@@ -1,18 +1,24 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.test.db;
 
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.Collections;
+
 import org.h2.api.ErrorCode;
 import org.h2.api.Trigger;
+import org.h2.engine.Constants;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
@@ -58,6 +64,7 @@ public class TestRunscript extends TestDb implements Trigger {
         testCancelScript();
         testEncoding();
         testClobPrimaryKey();
+        testTruncateLargeLength();
         testVariableBinary();
         deleteDb("runscript");
     }
@@ -67,7 +74,7 @@ public class TestRunscript extends TestDb implements Trigger {
         Connection conn;
         conn = getConnection("runscript");
         Statement stat = conn.createStatement();
-        stat.execute("create alias int_decode for \"java.lang.Integer.decode\"");
+        stat.execute("create alias int_decode for 'java.lang.Integer.decode'");
         stat.execute("create table test(x varchar, y int as int_decode(x))");
         stat.execute("script simple drop to '" +
                 getBaseDir() + "/backup.sql'");
@@ -108,8 +115,8 @@ public class TestRunscript extends TestDb implements Trigger {
         stat.execute("create schema include_schema2");
         stat.execute("script nosettings schema include_schema1, include_schema2");
         rs = stat.getResultSet();
-        // user and one row per schema = 3
-        assertResultRowCount(3, rs);
+        // version, user, and one row per schema = 4
+        assertResultRowCount(4, rs);
         rs.close();
         conn.close();
     }
@@ -151,8 +158,8 @@ public class TestRunscript extends TestDb implements Trigger {
         }
         stat.execute("script nosettings table a.test1, test2");
         rs = stat.getResultSet();
-        // user, schemas 'a' & 'b' and 2 rows per table = 7
-        assertResultRowCount(7, rs);
+        // version, user, schemas 'a' & 'b', and 2 rows per table = 7
+        assertResultRowCount(8, rs);
         rs.close();
         conn.close();
     }
@@ -166,7 +173,7 @@ public class TestRunscript extends TestDb implements Trigger {
         stat.execute("create schema a");
         stat.execute("create schema b");
         stat.execute("create schema c");
-        stat.execute("create alias a.int_decode for \"java.lang.Integer.decode\"");
+        stat.execute("create alias a.int_decode for 'java.lang.Integer.decode'");
         stat.execute("create table a.test(x varchar, y int as a.int_decode(x))");
         stat.execute("script schema b");
         rs = stat.getResultSet();
@@ -332,7 +339,7 @@ public class TestRunscript extends TestDb implements Trigger {
     }
 
     private void testCancelScript() throws Exception {
-        if (config.travis) {
+        if (config.ci) {
             // fails regularly under Travis, not sure why
             return;
         }
@@ -426,7 +433,7 @@ public class TestRunscript extends TestDb implements Trigger {
         stat.execute("create table test(id int not null, data clob) " +
                 "as select 1, space(4100)");
         // the primary key for SYSTEM_LOB_STREAM used to be named like this
-        stat.execute("create primary key primary_key_e on test(id)");
+        stat.execute("alter table test add constraint primary_key_e primary key(id)");
         stat.execute("script to '" + getBaseDir() + "/backup.sql'");
         conn.close();
         deleteDb("runscript");
@@ -449,8 +456,7 @@ public class TestRunscript extends TestDb implements Trigger {
         stat1.execute("create table test2(id int primary key) as " +
                 "select x from system_range(1, 5000)");
         stat1.execute("create sequence testSeq start with 100 increment by 10");
-        stat1.execute("create alias myTest for \"" +
-                getClass().getName() + ".test\"");
+        stat1.execute("create alias myTest for '" + getClass().getName() + ".test'");
         stat1.execute("create trigger myTrigger before insert " +
                 "on test nowait call \"" + getClass().getName() + "\"");
         stat1.execute("create view testView as select * " +
@@ -542,7 +548,26 @@ public class TestRunscript extends TestDb implements Trigger {
         deleteDb("runscriptRestoreRecover");
         FileUtils.delete(getBaseDir() + "/backup.2.sql");
         FileUtils.delete(getBaseDir() + "/backup.3.sql");
+        FileUtils.delete(getBaseDir() + "/runscript.h2.sql");
 
+    }
+
+    private void testTruncateLargeLength() throws Exception {
+        deleteDb("runscript");
+        Connection conn;
+        Statement stat;
+        Files.write(Paths.get(getBaseDir() + "/backup.sql"),
+                Collections.singleton("CREATE TABLE TEST(V VARCHAR(2147483647))"), //
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        conn = getConnection("runscript");
+        stat = conn.createStatement();
+        assertThrows(ErrorCode.INVALID_VALUE_PRECISION, stat)
+                .execute("RUNSCRIPT FROM '" + getBaseDir() + "/backup.sql'");
+        stat.execute("RUNSCRIPT FROM '" + getBaseDir() + "/backup.sql' QUIRKS_MODE");
+        assertEquals(Constants.MAX_STRING_LENGTH, stat.executeQuery("TABLE TEST").getMetaData().getPrecision(1));
+        conn.close();
+        deleteDb("runscript");
+        FileUtils.delete(getBaseDir() + "/backup.sql");
     }
 
     private void testVariableBinary() throws SQLException {

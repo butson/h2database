@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.h2.engine.Constants;
+import org.h2.jdbc.JdbcException;
 import org.h2.util.StringUtils;
 
 /**
@@ -134,21 +135,6 @@ public final class DataUtils {
     public static final int PAGE_COMPRESSED_HIGH = 2 + 4;
 
     /**
-     * The bit mask for pages with page sequential number.
-     */
-    public static final int PAGE_HAS_PAGE_NO = 8;
-
-    /**
-     * The maximum length of a variable size int.
-     */
-    public static final int MAX_VAR_INT_LEN = 5;
-
-    /**
-     * The maximum length of a variable size long.
-     */
-    public static final int MAX_VAR_LONG_LEN = 10;
-
-    /**
      * The maximum integer that needs less space when using variable size
      * encoding (only 3 bytes instead of 4).
      */
@@ -165,13 +151,21 @@ public final class DataUtils {
      */
     public static final int PAGE_LARGE = 2 * 1024 * 1024;
 
-    // The following are key prefixes used in meta map
+    // The following are key prefixes used in layout map
 
     /**
      * The prefix for chunks ("chunk."). This, plus the chunk id (hex encoded)
      * is the key, and the serialized chunk metadata is the value.
      */
-    public static final String META_CHUNK = "chunk.";
+    public static final String LAYOUT_CHUNK = "chunk.";
+
+    /**
+     * The prefix for root positions of maps ("root."). This, plus the map id
+     * (hex encoded) is the key, and the position (hex encoded) is the value.
+     */
+    public static final String LAYOUT_ROOT = "root.";
+
+    // The following are key prefixes used in meta map
 
     /**
      * The prefix for names ("name."). This, plus the name of the map, is the
@@ -184,12 +178,6 @@ public final class DataUtils {
      * key, and the serialized in the map metadata is the value.
      */
     public static final String META_MAP = "map.";
-
-    /**
-     * The prefix for root positions of maps ("root."). This, plus the map id
-     * (hex encoded) is the key, and the position (hex encoded) is the value.
-     */
-    public static final String META_ROOT = "root.";
 
     /**
      * Get the length of the variable size int.
@@ -328,7 +316,7 @@ public final class DataUtils {
                 buff.put((byte) c);
             } else if (c >= 0x800) {
                 buff.put((byte) (0xe0 | (c >> 12)));
-                buff.put((byte) (((c >> 6) & 0x3f)));
+                buff.put((byte) ((c >> 6) & 0x3f));
                 buff.put((byte) (c & 0x3f));
             } else {
                 buff.put((byte) (0xc0 | (c >> 6)));
@@ -501,6 +489,7 @@ public final class DataUtils {
      * @return the length code
      */
     public static int encodeLength(int len) {
+        assert len >= 0;
         if (len <= 32) {
             return 0;
         }
@@ -633,10 +622,13 @@ public final class DataUtils {
      * @param type the page type (1 for node, 0 for leaf)
      * @return the position
      */
-    public static long getPagePos(int chunkId, int offset, int length, int type) {
+    public static long composePagePos(int chunkId, int offset, int length, int type) {
+        assert offset >= 0;
+        assert type == DataUtils.PAGE_TYPE_LEAF || type == DataUtils.PAGE_TYPE_NODE;
+
         long pos = (long) chunkId << 38;
         pos |= (long) offset << 6;
-        pos |= encodeLength(length) << 1;
+        pos |= (long) encodeLength(length) << 1;
         pos |= type;
         return pos;
     }
@@ -648,7 +640,7 @@ public final class DataUtils {
      * @param tocElement the element
      * @return the page position
      */
-    public static long getPagePos(int chunkId, long tocElement) {
+    public static long composePagePos(int chunkId, long tocElement) {
         return (tocElement & 0x3FFFFFFFFFL) | ((long) chunkId << 38);
     }
 
@@ -663,10 +655,13 @@ public final class DataUtils {
      * @param type the page type (1 for node, 0 for leaf)
      * @return the position
      */
-    public static long getTocElement(int mapId, int offset, int length, int type) {
+    public static long composeTocElement(int mapId, int offset, int length, int type) {
+        assert mapId >= 0;
+        assert offset >= 0;
+        assert type == DataUtils.PAGE_TYPE_LEAF || type == DataUtils.PAGE_TYPE_NODE;
         long pos = (long) mapId << 38;
         pos |= (long) offset << 6;
-        pos |= encodeLength(length) << 1;
+        pos |= (long) encodeLength(length) << 1;
         pos |= type;
         return pos;
     }
@@ -1114,7 +1109,7 @@ public final class DataUtils {
      * @return the parsed value
      * @throws MVStoreException if parsing fails
      */
-    public static int readHexInt(Map<String, ?> map, String key, int defaultValue) {
+    static int readHexInt(Map<String, ?> map, String key, int defaultValue) {
         Object v = map.get(key);
         if (v == null) {
             return defaultValue;
@@ -1130,7 +1125,14 @@ public final class DataUtils {
         }
     }
 
-    public static byte[] parseHexBytes(Map<String, ?> map, String key) {
+    /**
+     * Parse the hex-encoded bytes of an entry in the map.
+     *
+     * @param map the map
+     * @param key the key
+     * @return the byte array, or null if not in the map
+     */
+    static byte[] parseHexBytes(Map<String, ?> map, String key) {
         Object v = map.get(key);
         if (v == null) {
             return null;
@@ -1146,7 +1148,7 @@ public final class DataUtils {
      * @param defaultValue the default
      * @return the configured value or default
      */
-    public static int getConfigParam(Map<String, ?> config, String key, int defaultValue) {
+    static int getConfigParam(Map<String, ?> config, String key, int defaultValue) {
         Object o = config.get(key);
         if (o instanceof Number) {
             return ((Number) o).intValue();
@@ -1160,4 +1162,21 @@ public final class DataUtils {
         return defaultValue;
     }
 
+    /**
+     * Convert an exception to an IO exception.
+     *
+     * @param e the root cause
+     * @return the IO exception
+     */
+    public static IOException convertToIOException(Throwable e) {
+        if (e instanceof IOException) {
+            return (IOException) e;
+        }
+        if (e instanceof JdbcException) {
+            if (e.getCause() != null) {
+                e = e.getCause();
+            }
+        }
+        return new IOException(e.toString(), e);
+    }
 }

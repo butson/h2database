@@ -1,14 +1,17 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.table;
 
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Stream;
 
-import org.h2.engine.Mode;
-import org.h2.engine.Session;
+import org.h2.constraint.Constraint;
+import org.h2.engine.SessionLocal;
 import org.h2.index.Index;
 import org.h2.index.IndexType;
 import org.h2.index.MetaIndex;
@@ -17,8 +20,6 @@ import org.h2.result.Row;
 import org.h2.result.SearchRow;
 import org.h2.schema.Schema;
 import org.h2.util.StringUtils;
-import org.h2.value.DataType;
-import org.h2.value.ExtTypeInfoArray;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 import org.h2.value.ValueNull;
@@ -50,6 +51,9 @@ public abstract class MetaTable extends Table {
      */
     protected MetaIndex metaIndex;
 
+    private MetaIndex scanIndex;
+    private final ArrayList<Index> indexes = new ArrayList<>(2);
+
     /**
      * Create a new metadata table.
      *
@@ -63,38 +67,45 @@ public abstract class MetaTable extends Table {
         this.type = type;
     }
 
+    @Override
+    protected void setColumns(Column[] columns) {
+        super.setColumns(columns);
+        scanIndex = new MetaIndex(this, IndexColumn.wrap(columns), true);
+        indexes.clear();
+        indexes.add(scanIndex);
+        if (metaIndex != null) {
+            indexes.add(metaIndex);
+        }
+    }
+
     protected final void setMetaTableName(String upperName) {
         setObjectName(database.sysIdentifier(upperName));
     }
 
-    protected final Column[] createColumns(String... names) {
-        Column[] cols = new Column[names.length];
-        TypeInfo defaultType = database.getSettings().caseInsensitiveIdentifiers ? TypeInfo.TYPE_VARCHAR_IGNORECASE
-                : TypeInfo.TYPE_VARCHAR;
-        Mode mode = database.getMode();
-        for (int i = 0; i < names.length; i++) {
-            String nameType = names[i];
-            int idx = nameType.indexOf(' ');
-            TypeInfo dataType;
-            String name;
-            if (idx < 0) {
-                dataType = defaultType;
-                name = nameType;
-            } else {
-                String tName = nameType.substring(idx + 1);
-                DataType t = DataType.getTypeByName(tName, mode);
-                if (t != null) {
-                    dataType = TypeInfo.getTypeInfo(t.type);
-                } else {
-                    assert tName.endsWith(" ARRAY");
-                    dataType = TypeInfo.getTypeInfo(Value.ARRAY, -1L, 0, new ExtTypeInfoArray(TypeInfo.getTypeInfo(
-                            DataType.getTypeByName(tName.substring(0, tName.length() - 6), mode).type)));
-                }
-                name = nameType.substring(0, idx);
-            }
-            cols[i] = new Column(database.sysIdentifier(name), dataType);
-        }
-        return cols;
+    /**
+     * Creates a column with the specified name and character string data type.
+     *
+     * @param name
+     *            the uppercase column name
+     * @return the column
+     */
+    final Column column(String name) {
+        return new Column(database.sysIdentifier(name),
+                database.getSettings().caseInsensitiveIdentifiers ? TypeInfo.TYPE_VARCHAR_IGNORECASE
+                        : TypeInfo.TYPE_VARCHAR);
+    }
+
+    /**
+     * Creates a column with the specified name and data type.
+     *
+     * @param name
+     *            the uppercase column name
+     * @param type
+     *            the data type
+     * @return the column
+     */
+    protected final Column column(String name, TypeInfo type) {
+        return new Column(database.sysIdentifier(name), type);
     }
 
     @Override
@@ -103,23 +114,17 @@ public abstract class MetaTable extends Table {
     }
 
     @Override
-    public final Index addIndex(Session session, String indexName, int indexId,
-            IndexColumn[] cols, IndexType indexType, boolean create,
-            String indexComment) {
+    public final Index addIndex(SessionLocal session, String indexName, int indexId, IndexColumn[] cols,
+            int uniqueColumnCount, IndexType indexType, boolean create, String indexComment) {
         throw DbException.getUnsupportedException("META");
     }
 
-    @Override
-    public final boolean lock(Session session, boolean exclusive, boolean forceLockEvenInMvcc) {
-        // nothing to do
-        return false;
-    }
-
-    @Override
-    public final boolean isLockedExclusively() {
-        return false;
-    }
-
+    /**
+     * If needed, convert the identifier to lower case.
+     *
+     * @param s the identifier to convert
+     * @return the converted identifier
+     */
     protected final String identifier(String s) {
         if (database.getSettings().databaseToLower) {
             s = s == null ? null : StringUtils.toLowerEnglish(s);
@@ -128,29 +133,15 @@ public abstract class MetaTable extends Table {
     }
 
     /**
-     * Get all tables of this database, including local temporary tables for the
-     * session.
+     * Checks index conditions.
      *
      * @param session the session
-     * @return the array of tables
+     * @param value the value
+     * @param indexFrom the lower bound of value, or {@code null}
+     * @param indexTo the higher bound of value, or {@code null}
+     * @return whether row should be included into result
      */
-    protected final ArrayList<Table> getAllTables(Session session) {
-        ArrayList<Table> tables = database.getAllTablesAndViews(true);
-        ArrayList<Table> tempTables = session.getLocalTempTables();
-        tables.addAll(tempTables);
-        return tables;
-    }
-
-    protected final ArrayList<Table> getTablesByName(Session session, String tableName) {
-        ArrayList<Table> tables = database.getTableOrViewByName(tableName);
-        Table temp = session.findLocalTempTable(tableName);
-        if (temp != null) {
-            tables.add(temp);
-        }
-        return tables;
-    }
-
-    protected final boolean checkIndex(Session session, String value, Value indexFrom, Value indexTo) {
+    protected final boolean checkIndex(SessionLocal session, String value, Value indexFrom, Value indexTo) {
         if (value == null || (indexFrom == null && indexTo == null)) {
             return true;
         }
@@ -169,8 +160,49 @@ public abstract class MetaTable extends Table {
         return true;
     }
 
-    protected final boolean hideTable(Table table, Session session) {
-        return table.isHidden() && session != database.getSystemSession();
+    /**
+     * Get all tables of this database, including local temporary tables for the
+     * session.
+     *
+     * @param session
+     *            the session
+     * @param indexFrom
+     *            first value or {@code null}
+     * @param indexTo
+     *            last value or {@code null}
+     * @return the stream of tables
+     */
+    protected final Stream<Table> getAllTables(SessionLocal session, Value indexFrom, Value indexTo) {
+        if (indexFrom != null && indexFrom.equals(indexTo)) {
+            String tableName = indexFrom.getString();
+            if (tableName == null) {
+                return Stream.empty();
+            }
+            return Stream
+                    .concat(database.getAllSchemas().stream()
+                            .map(schema -> schema.getTableOrViewByName(session, tableName)),
+                            Stream.ofNullable(session.findLocalTempTable(tableName)))
+                    .filter(Objects::nonNull);
+        } else {
+            return Stream
+                    .concat(database.getAllSchemas().stream()
+                            .flatMap(schema -> schema.getAllTablesAndViews(session).stream()),
+                            session.getLocalTempTables().stream())
+                    .filter(table -> checkIndex(session, table.getName(), indexFrom, indexTo));
+        }
+    }
+
+    /**
+     * Get all constraints of this database, including constraints of local
+     * temporary tables for the session.
+     *
+     * @param session
+     *            the session
+     * @return the stream of constraints
+     */
+    protected final Stream<Constraint> getAllConstraints(SessionLocal session) {
+        return Stream.concat(database.getAllSchemas().stream().flatMap(schema -> schema.getAllConstraints().stream()),
+                session.getLocalTempTableConstraints().values().stream());
     }
 
     /**
@@ -182,34 +214,41 @@ public abstract class MetaTable extends Table {
      * @param last the last row to return
      * @return the generated rows
      */
-    public abstract ArrayList<Row> generateRows(Session session, SearchRow first, SearchRow last);
+    public abstract ArrayList<Row> generateRows(SessionLocal session, SearchRow first, SearchRow last);
 
     @Override
-    public final void removeRow(Session session, Row row) {
+    public boolean isInsertable() {
+        return false;
+    }
+
+    @Override
+    public final void removeRow(SessionLocal session, Row row) {
         throw DbException.getUnsupportedException("META");
     }
 
     @Override
-    public final void addRow(Session session, Row row) {
+    public final void addRow(SessionLocal session, Row row) {
         throw DbException.getUnsupportedException("META");
     }
 
     @Override
-    public final void removeChildrenAndResources(Session session) {
+    public final void removeChildrenAndResources(SessionLocal session) {
         throw DbException.getUnsupportedException("META");
     }
 
     @Override
-    public final void close(Session session) {
+    public final void close(SessionLocal session) {
         // nothing to do
     }
 
-    @Override
-    public final void unlock(Session s) {
-        // nothing to do
-    }
-
-    protected final void add(Session session, ArrayList<Row> rows, Object... stringsOrValues) {
+    /**
+     * Add a row to a list.
+     *
+     * @param session the session
+     * @param rows the original row list
+     * @param stringsOrValues the values, or strings
+     */
+    protected final void add(SessionLocal session, ArrayList<Row> rows, Object... stringsOrValues) {
         Value[] values = new Value[stringsOrValues.length];
         for (int i = 0; i < stringsOrValues.length; i++) {
             Object s = stringsOrValues[i];
@@ -230,17 +269,17 @@ public abstract class MetaTable extends Table {
     }
 
     @Override
-    public final void truncate(Session session) {
+    public final long truncate(SessionLocal session) {
         throw DbException.getUnsupportedException("META");
     }
 
     @Override
-    public final long getRowCount(Session session) {
-        throw DbException.throwInternalError(toString());
+    public long getRowCount(SessionLocal session) {
+        throw DbException.getInternalError(toString());
     }
 
     @Override
-    public final boolean canGetRowCount() {
+    public boolean canGetRowCount(SessionLocal session) {
         return false;
     }
 
@@ -255,35 +294,18 @@ public abstract class MetaTable extends Table {
     }
 
     @Override
-    public final Index getScanIndex(Session session) {
-        return new MetaIndex(this, IndexColumn.wrap(columns), true);
+    public final Index getScanIndex(SessionLocal session) {
+        return scanIndex;
     }
 
     @Override
-    public final ArrayList<Index> getIndexes() {
-        ArrayList<Index> list = new ArrayList<>(2);
-        if (metaIndex == null) {
-            return list;
-        }
-        list.add(new MetaIndex(this, IndexColumn.wrap(columns), true));
-        // TODO re-use the index
-        list.add(metaIndex);
-        return list;
+    public final List<Index> getIndexes() {
+        return indexes;
     }
 
     @Override
-    public final Index getUniqueIndex() {
-        return null;
-    }
-
-    @Override
-    public final long getRowCountApproximation() {
+    public long getRowCountApproximation(SessionLocal session) {
         return ROW_COUNT_APPROXIMATION;
-    }
-
-    @Override
-    public final long getDiskSpaceUsed() {
-        return 0L;
     }
 
     @Override

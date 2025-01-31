@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,7 +10,7 @@ import java.util.HashSet;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionColumn;
 import org.h2.expression.ExpressionVisitor;
@@ -66,9 +66,9 @@ public class SelectUnion extends Query {
      */
     final Query right;
 
-    private boolean isForUpdate;
+    private ForUpdate forUpdate;
 
-    public SelectUnion(Session session, UnionType unionType, Query query, Query right) {
+    public SelectUnion(SessionLocal session, UnionType unionType, Query query, Query right) {
         super(session);
         this.unionType = unionType;
         this.left = query;
@@ -115,10 +115,10 @@ public class SelectUnion extends Query {
     }
 
     @Override
-    protected ResultInterface queryWithoutCache(int maxRows, ResultTarget target) {
+    protected ResultInterface queryWithoutCache(long maxRows, ResultTarget target) {
         OffsetFetch offsetFetch = getOffsetFetch(maxRows);
         long offset = offsetFetch.offset;
-        int fetch = offsetFetch.fetch;
+        long fetch = offsetFetch.fetch;
         boolean fetchPercent = offsetFetch.fetchPercent;
         Database db = session.getDatabase();
         if (db.getSettings().optimizeInsertFromSelect) {
@@ -132,7 +132,7 @@ public class SelectUnion extends Query {
         }
         int columnCount = left.getColumnCount();
         if (session.isLazyQueryExecution() && unionType == UnionType.UNION_ALL && !distinct &&
-                sort == null && !randomAccessResult && !isForUpdate &&
+                sort == null && inPredicateSortTypes == null && forUpdate == null &&
                 offset == 0 && !fetchPercent && !withTies && isReadOnly()) {
             // limit 0 means no rows
             if (fetch != 0) {
@@ -166,7 +166,7 @@ public class SelectUnion extends Query {
             right.setDistinctIfPossible();
             break;
         default:
-            DbException.throwInternalError("type=" + unionType);
+            throw DbException.getInternalError("type=" + unionType);
         }
         ResultInterface l = left.query(0);
         ResultInterface r = right.query(0);
@@ -208,7 +208,7 @@ public class SelectUnion extends Query {
             break;
         }
         default:
-            DbException.throwInternalError("type=" + unionType);
+            throw DbException.getInternalError("type=" + unionType);
         }
         l.close();
         r.close();
@@ -222,7 +222,7 @@ public class SelectUnion extends Query {
     @Override
     public void init() {
         if (checkInit) {
-            DbException.throwInternalError();
+            throw DbException.getInternalError();
         }
         checkInit = true;
         left.init();
@@ -246,17 +246,9 @@ public class SelectUnion extends Query {
     }
 
     @Override
-    public void prepare() {
-        if (isPrepared) {
-            // sometimes a subquery is prepared twice (CREATE TABLE AS SELECT)
-            return;
-        }
-        if (!checkInit) {
-            DbException.throwInternalError("not initialized");
-        }
-        isPrepared = true;
-        left.prepare();
-        right.prepare();
+    public void prepareExpressions() {
+        left.prepareExpressions();
+        right.prepareExpressions();
         int len = left.getColumnCount();
         // set the correct expressions now
         expressions = new ArrayList<>(len);
@@ -280,6 +272,13 @@ public class SelectUnion extends Query {
     }
 
     @Override
+    public void preparePlan() {
+        left.preparePlan();
+        right.preparePlan();
+        isPrepared = true;
+    }
+
+    @Override
     public double getCost() {
         return left.getCost() + right.getCost();
     }
@@ -292,16 +291,21 @@ public class SelectUnion extends Query {
     }
 
     @Override
-    public void setForUpdate(boolean forUpdate) {
-        left.setForUpdate(forUpdate);
-        right.setForUpdate(forUpdate);
-        isForUpdate = forUpdate;
+    public ForUpdate getForUpdate() {
+        return forUpdate;
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        left.mapColumns(resolver, level);
-        right.mapColumns(resolver, level);
+    public void setForUpdate(ForUpdate forUpdate) {
+        left.setForUpdate(forUpdate);
+        right.setForUpdate(forUpdate);
+        this.forUpdate = forUpdate;
+    }
+
+    @Override
+    public void mapColumns(ColumnResolver resolver, int level, boolean outer) {
+        left.mapColumns(resolver, level, outer);
+        right.mapColumns(resolver, level, outer);
     }
 
     @Override
@@ -327,36 +331,36 @@ public class SelectUnion extends Query {
             break;
         }
         default:
-            DbException.throwInternalError("type=" + unionType);
+            throw DbException.getInternalError("type=" + unionType);
         }
     }
 
     @Override
-    public String getPlanSQL(int sqlFlags) {
-        StringBuilder buff = new StringBuilder();
-        buff.append('(').append(left.getPlanSQL(sqlFlags)).append(')');
+    public StringBuilder getPlanSQL(StringBuilder builder, int sqlFlags) {
+        writeWithList(builder, sqlFlags);
+        left.getPlanSQL(builder.append('('), sqlFlags).append(')');
         switch (unionType) {
         case UNION_ALL:
-            buff.append("\nUNION ALL\n");
+            builder.append("\nUNION ALL\n");
             break;
         case UNION:
-            buff.append("\nUNION\n");
+            builder.append("\nUNION\n");
             break;
         case INTERSECT:
-            buff.append("\nINTERSECT\n");
+            builder.append("\nINTERSECT\n");
             break;
         case EXCEPT:
-            buff.append("\nEXCEPT\n");
+            builder.append("\nEXCEPT\n");
             break;
         default:
-            DbException.throwInternalError("type=" + unionType);
+            throw DbException.getInternalError("type=" + unionType);
         }
-        buff.append('(').append(right.getPlanSQL(sqlFlags)).append(')');
-        appendEndOfQueryToSQL(buff, sqlFlags, expressions.toArray(new Expression[0]));
-        if (isForUpdate) {
-            buff.append("\nFOR UPDATE");
+        right.getPlanSQL(builder.append('('), sqlFlags).append(')');
+        appendEndOfQueryToSQL(builder, sqlFlags, expressions.toArray(new Expression[0]));
+        if (forUpdate != null) {
+            forUpdate.getSQL(builder, sqlFlags);
         }
-        return buff.toString();
+        return builder;
     }
 
     @Override
@@ -365,7 +369,7 @@ public class SelectUnion extends Query {
     }
 
     @Override
-    public void updateAggregate(Session s, int stage) {
+    public void updateAggregate(SessionLocal s, int stage) {
         left.updateAggregate(s, stage);
         right.updateAggregate(s, stage);
     }

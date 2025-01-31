@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -9,13 +9,14 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.StringTokenizer;
-
 import org.h2.bnf.context.DbContextRule;
+import org.h2.command.dml.Help;
 import org.h2.tools.Csv;
 import org.h2.util.StringUtils;
 import org.h2.util.Utils;
@@ -45,12 +46,14 @@ public class Bnf {
      *
      * @param csv if not specified, the help.csv is used
      * @return a new instance
+     * @throws SQLException on failure
+     * @throws IOException on failure
      */
     public static Bnf getInstance(Reader csv) throws SQLException, IOException {
         Bnf bnf = new Bnf();
         if (csv == null) {
             byte[] data = Utils.getResource("/org/h2/res/help.csv");
-            csv = new InputStreamReader(new ByteArrayInputStream(data));
+            csv = new InputStreamReader(new ByteArrayInputStream(data), StandardCharsets.UTF_8);
         }
         bnf.parse(csv);
         return bnf;
@@ -75,10 +78,9 @@ public class Bnf {
     private RuleHead addRule(String topic, String section, Rule rule) {
         RuleHead head = new RuleHead(section, topic, rule);
         String key = StringUtils.toLowerEnglish(topic.trim().replace(' ', '_'));
-        if (ruleMap.get(key) != null) {
+        if (ruleMap.putIfAbsent(key, head) != null) {
             throw new AssertionError("already exists: " + topic);
         }
-        ruleMap.put(key, head);
         return head;
     }
 
@@ -94,7 +96,7 @@ public class Bnf {
                 continue;
             }
             String topic = rs.getString("TOPIC");
-            syntax = rs.getString("SYNTAX").trim();
+            syntax = Help.stripAnnotationsFromSyntax(rs.getString("SYNTAX"));
             currentTopic = section;
             tokens = tokenize();
             index = 0;
@@ -118,12 +120,15 @@ public class Bnf {
         addFixedRule("@hms@", RuleFixed.HMS);
         addFixedRule("@nanos@", RuleFixed.NANOS);
         addFixedRule("anything_except_single_quote", RuleFixed.ANY_EXCEPT_SINGLE_QUOTE);
+        addFixedRule("single_character", RuleFixed.ANY_EXCEPT_SINGLE_QUOTE);
         addFixedRule("anything_except_double_quote", RuleFixed.ANY_EXCEPT_DOUBLE_QUOTE);
         addFixedRule("anything_until_end_of_line", RuleFixed.ANY_UNTIL_EOL);
         addFixedRule("anything_until_comment_start_or_end", RuleFixed.ANY_UNTIL_END);
         addFixedRule("anything_except_two_dollar_signs", RuleFixed.ANY_EXCEPT_2_DOLLAR);
         addFixedRule("anything", RuleFixed.ANY_WORD);
         addFixedRule("@hex_start@", RuleFixed.HEX_START);
+        addFixedRule("@octal_start@", RuleFixed.OCTAL_START);
+        addFixedRule("@binary_start@", RuleFixed.BINARY_START);
         addFixedRule("@concat@", RuleFixed.CONCAT);
         addFixedRule("@az_@", RuleFixed.AZ_UNDERSCORE);
         addFixedRule("@af@", RuleFixed.AF);
@@ -131,6 +136,8 @@ public class Bnf {
         addFixedRule("@open_bracket@", RuleFixed.OPEN_BRACKET);
         addFixedRule("@close_bracket@", RuleFixed.CLOSE_BRACKET);
         addFixedRule("json_text", RuleFixed.JSON_TEXT);
+        Rule digit = ruleMap.get("digit").getRule();
+        ruleMap.get("number").setRule(new RuleList(digit, new RuleOptional(new RuleRepeat(digit, false)), false));
     }
 
     /**
@@ -166,7 +173,8 @@ public class Bnf {
      */
     public static String getRuleMapKey(String token) {
         StringBuilder buff = new StringBuilder();
-        for (char ch : token.toCharArray()) {
+        for (int i = 0, l = token.length(); i < l; i++) {
+            char ch = token.charAt(i);
             if (Character.isUpperCase(ch)) {
                 buff.append('_').append(Character.toLowerCase(ch));
             } else {
@@ -305,6 +313,8 @@ public class Bnf {
         syntax = StringUtils.replaceAll(syntax, "nnnnnnnnn", "@nanos@");
         syntax = StringUtils.replaceAll(syntax, "function", "@func@");
         syntax = StringUtils.replaceAll(syntax, "0x", "@hexStart@");
+        syntax = StringUtils.replaceAll(syntax, "0o", "@octalStart@");
+        syntax = StringUtils.replaceAll(syntax, "0b", "@binaryStart@");
         syntax = StringUtils.replaceAll(syntax, ",...", "@commaDots@");
         syntax = StringUtils.replaceAll(syntax, "...", "@dots@");
         syntax = StringUtils.replaceAll(syntax, "||", "@concat@");

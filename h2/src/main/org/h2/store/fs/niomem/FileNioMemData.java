@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -27,21 +27,11 @@ class FileNioMemData {
     private static final int BLOCK_SIZE_MASK = BLOCK_SIZE - 1;
     private static final ByteBuffer COMPRESSED_EMPTY_BLOCK;
 
-    private static final ThreadLocal<CompressLZF> LZF_THREAD_LOCAL =
-            new ThreadLocal<CompressLZF>() {
-        @Override
-        protected CompressLZF initialValue() {
-            return new CompressLZF();
-        }
-    };
+    private static final ThreadLocal<CompressLZF> LZF_THREAD_LOCAL = ThreadLocal.withInitial(CompressLZF::new);
+
     /** the output buffer when compressing */
-    private static final ThreadLocal<byte[] > COMPRESS_OUT_BUF_THREAD_LOCAL =
-            new ThreadLocal<byte[] >() {
-        @Override
-        protected byte[] initialValue() {
-            return new byte[BLOCK_SIZE * 2];
-        }
-    };
+    private static final ThreadLocal<byte[]> COMPRESS_OUT_BUF_THREAD_LOCAL = ThreadLocal
+            .withInitial(() -> new byte[BLOCK_SIZE * 2]);
 
     /**
      * The hash code of the name.
@@ -55,7 +45,7 @@ class FileNioMemData {
     private final boolean compress;
     private final float compressLaterCachePercent;
     private volatile long length;
-    private AtomicReference<ByteBuffer>[] buffers;
+    private volatile AtomicReference<ByteBuffer>[] buffers;
     private long lastModified;
     private boolean isReadOnly;
     private boolean isLockedExclusive;
@@ -65,7 +55,7 @@ class FileNioMemData {
     static {
         final byte[] n = new byte[BLOCK_SIZE];
         final byte[] output = new byte[BLOCK_SIZE * 2];
-        int len = new CompressLZF().compress(n, BLOCK_SIZE, output, 0);
+        int len = new CompressLZF().compress(n, 0, BLOCK_SIZE, output, 0);
         COMPRESSED_EMPTY_BLOCK = ByteBuffer.allocateDirect(len);
         COMPRESSED_EMPTY_BLOCK.put(output, 0, len);
     }

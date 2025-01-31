@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
 
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.analysis.DataAnalysisOperation;
 import org.h2.expression.analysis.PartitionData;
@@ -64,7 +64,7 @@ public abstract class SelectGroups {
          */
         private Iterator<Entry<ValueRow, Object[]>> cursor;
 
-        Grouped(Session session, ArrayList<Expression> expressions, int[] groupIndex) {
+        Grouped(SessionLocal session, ArrayList<Expression> expressions, int[] groupIndex) {
             super(session, expressions);
             this.groupIndex = groupIndex;
         }
@@ -72,7 +72,7 @@ public abstract class SelectGroups {
         @Override
         public void reset() {
             super.reset();
-            groupByData = new TreeMap<>(session.getDatabase().getCompareMode());
+            groupByData = new TreeMap<>(session);
             currentGroupsKey = null;
             cursor = null;
         }
@@ -153,7 +153,7 @@ public abstract class SelectGroups {
          */
         private Iterator<Object[]> cursor;
 
-        Plain(Session session, ArrayList<Expression> expressions) {
+        Plain(SessionLocal session, ArrayList<Expression> expressions) {
             super(session, expressions);
         }
 
@@ -197,7 +197,7 @@ public abstract class SelectGroups {
     /**
      * The database session.
      */
-    final Session session;
+    final SessionLocal session;
 
     /**
      * The query's column list, including invisible expressions such as order by expressions.
@@ -243,12 +243,12 @@ public abstract class SelectGroups {
      *            the indexes of group expressions, or null
      * @return new instance of the grouped data.
      */
-    public static SelectGroups getInstance(Session session, ArrayList<Expression> expressions, boolean isGroupQuery,
-            int[] groupIndex) {
+    public static SelectGroups getInstance(SessionLocal session, ArrayList<Expression> expressions,
+            boolean isGroupQuery, int[] groupIndex) {
         return isGroupQuery ? new Grouped(session, expressions, groupIndex) : new Plain(session, expressions);
     }
 
-    SelectGroups(Session session, ArrayList<Expression> expressions) {
+    SelectGroups(SessionLocal session, ArrayList<Expression> expressions) {
         this.session = session;
         this.expressions = expressions;
     }
@@ -346,7 +346,7 @@ public abstract class SelectGroups {
         } else {
             TreeMap<Value, PartitionData> map = windowPartitionData.get(expr);
             if (map == null) {
-                map = new TreeMap<>(session.getDatabase().getCompareMode());
+                map = new TreeMap<>(session);
                 windowPartitionData.put(expr, map);
             }
             map.put(partitionKey, obj);
@@ -430,13 +430,4 @@ public abstract class SelectGroups {
         currentGroupRowId++;
     }
 
-    /**
-     * Gets the query's column list, including invisible expressions
-     * such as order by expressions.
-     *
-     * @return Expressions.
-     */
-    public ArrayList<Expression> expressions() {
-        return expressions;
-    }
 }

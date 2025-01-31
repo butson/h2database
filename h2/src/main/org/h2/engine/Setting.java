@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,12 +7,11 @@ package org.h2.engine;
 
 import org.h2.message.DbException;
 import org.h2.message.Trace;
-import org.h2.table.Table;
 
 /**
  * A persistent database setting.
  */
-public class Setting extends DbObjectBase {
+public final class Setting extends DbObject {
 
     private int intValue;
     private String stringValue;
@@ -48,11 +47,6 @@ public class Setting extends DbObjectBase {
     }
 
     @Override
-    public String getCreateSQLForCopy(Table table, String quotedName) {
-        throw DbException.throwInternalError(toString());
-    }
-
-    @Override
     public String getCreateSQL() {
         StringBuilder buff = new StringBuilder("SET ");
         getSQL(buff, DEFAULT_SQL_FLAGS).append(' ');
@@ -70,7 +64,7 @@ public class Setting extends DbObjectBase {
     }
 
     @Override
-    public void removeChildrenAndResources(Session session) {
+    public void removeChildrenAndResources(SessionLocal session) {
         database.removeMeta(session, getId());
         invalidate();
     }

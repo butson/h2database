@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -33,33 +33,43 @@ import org.h2.build.doc.XMLParser;
  */
 public class Build extends BuildBase {
 
-    private static final String ASM_VERSION = "7.2";
+    private static final String ASM_VERSION = "9.5";
 
     private static final String ARGS4J_VERSION = "2.33";
 
-    private static final String DERBY_VERSION = "10.15.1.3";
+    private static final String DERBY_VERSION = "10.15.2.0";
 
-    private static final String HSQLDB_VERSION = "2.5.0";
+    private static final String HSQLDB_VERSION = "2.7.2";
 
-    private static final String JACOCO_VERSION = "0.8.5";
+    private static final String JACOCO_VERSION = "0.8.10";
 
-    private static final String JTS_VERSION = "1.16.1";
+    private static final String JTS_VERSION = "1.19.0";
 
-    private static final String JUNIT_VERSION = "5.5.2";
+    private static final String JUNIT_VERSION = "5.10.0";
 
-    private static final String LUCENE_VERSION = "8.2.0";
+    private static final String LUCENE_VERSION = "9.7.0";
 
-    private static final String MYSQL_CONNECTOR_VERSION = "8.0.18";
+    private static final String MYSQL_CONNECTOR_VERSION = "8.1.0";
 
     private static final String OSGI_VERSION = "5.0.0";
 
-    private static final String PGJDBC_VERSION = "42.2.8";
+    private static final String OSGI_JDBC_VERSION = "1.1.0";
 
-    private static final String PGJDBC_HASH = "6f394c7df5600d11b221f356ff020440d2ece44f";
+    private static final String PGJDBC_VERSION = "42.7.2";
 
-    private static final String SERVLET_VERSION = "4.0.1";
+    private static final String PGJDBC_HASH = "86ed42574cd68662b05d3b00432a34e9a34cb12c";
 
-    private static final String SLF4J_VERSION = "1.7.28";
+    private static final String JAVAX_SERVLET_VERSION = "4.0.1";
+
+    private static final String JAKARTA_SERVLET_VERSION = "5.0.0";
+
+    private static final String SLF4J_VERSION = "2.0.7";
+
+    private static final String APIGUARDIAN_VERSION = "1.1.2";
+
+    private static final String SQLITE_VERSION = "3.36.0.3";
+
+    private static final String NASHORN_VERSION = "15.4";
 
     private boolean filesMissing;
 
@@ -79,24 +89,26 @@ public class Build extends BuildBase {
     public void benchmark() {
         downloadUsingMaven("ext/hsqldb-" + HSQLDB_VERSION + ".jar",
                 "org.hsqldb", "hsqldb", HSQLDB_VERSION,
-                "59298fcd77faf01e02b405def2f80cccbf582508");
-        downloadUsingMaven("ext/derby-" + DERBY_VERSION,
+                "d92d4d2aa515714da2165c9d640d584c2896c9df");
+        downloadUsingMaven("ext/derby-" + DERBY_VERSION + ".jar",
                 "org.apache.derby", "derby", DERBY_VERSION,
-                "79505f952a4f8d6be761413d7b10a64d6405e57a");
+                "b64da6681994f33ba5783ffae55cdb44885b9e70");
         downloadUsingMaven("ext/derbyclient-" + DERBY_VERSION + ".jar",
                 "org.apache.derby", "derbyclient", DERBY_VERSION,
-                "9a08ac1b0b547ca436c85799926b2459d48b2402");
+                "60ad423e9d7acba99a13b8684927206e94c31e03");
         downloadUsingMaven("ext/derbynet-" + DERBY_VERSION + ".jar",
                 "org.apache.derby", "derbynet", DERBY_VERSION,
-                "6e15859b3bb1e654f417f1a498fc2a6e76fa8e80");
+                "072c8fb0870227477b64edb2d7a5eccdac5de2af");
         downloadUsingMaven("ext/derbyshared-" + DERBY_VERSION + ".jar",
                 "org.apache.derby", "derbyshared", DERBY_VERSION,
-                "c7fb80babe6a671f0a5e4d0c9ad96dfb723df49d");
+                "ff2dfb3e2a92d593cf111baad242d156947abbc1");
         downloadUsingMaven("ext/postgresql-" + PGJDBC_VERSION + ".jar",
                 "org.postgresql", "postgresql", PGJDBC_VERSION, PGJDBC_HASH);
-        downloadUsingMaven("ext/mysql-connector-java-" + MYSQL_CONNECTOR_VERSION + ".jar",
-                "mysql", "mysql-connector-java", MYSQL_CONNECTOR_VERSION,
-                "e088efaa4b568bc7d9f7274b9c5ea1a00da1a45c");
+        downloadUsingMaven("ext/mysql-connector-j-" + MYSQL_CONNECTOR_VERSION + ".jar",
+                "com.mysql", "mysql-connector-j", MYSQL_CONNECTOR_VERSION,
+                "3f78d2963935f44a61edb3961a591cdc392c8941");
+        downloadUsingMaven("ext/sqlite-" + SQLITE_VERSION + ".jar",
+            "org.xerial", "sqlite-jdbc", SQLITE_VERSION, "7fa71c4dfab806490cb909714fb41373ec552c29");
         compile();
 
         String cp = "temp" +
@@ -107,9 +119,10 @@ public class Build extends BuildBase {
                 File.pathSeparator + "ext/derbynet-" + DERBY_VERSION + ".jar" +
                 File.pathSeparator + "ext/derbyshared-" + DERBY_VERSION + ".jar" +
                 File.pathSeparator + "ext/postgresql-" + PGJDBC_VERSION + ".jar" +
-                File.pathSeparator + "ext/mysql-connector-java-" + MYSQL_CONNECTOR_VERSION + ".jar";
+                File.pathSeparator + "ext/mysql-connector-j-" + MYSQL_CONNECTOR_VERSION + ".jar" +
+                File.pathSeparator + "ext/sqlite-" + SQLITE_VERSION + ".jar";
         StringList args = args("-Xmx128m",
-                "-cp", cp, "org.h2.test.bench.TestPerformance");
+                "-cp", cp, "-Dderby.system.durability=test", "org.h2.test.bench.TestPerformance");
         execJava(args.plus("-init", "-db", "1"));
         execJava(args.plus("-db", "2"));
         execJava(args.plus("-db", "3", "-out", "pe.html"));
@@ -118,6 +131,8 @@ public class Build extends BuildBase {
         execJava(args.plus("-db", "6"));
         execJava(args.plus("-db", "7"));
         execJava(args.plus("-db", "8", "-out", "ps.html"));
+        // Disable SQLite because it doesn't work with multi-threaded benchmark, BenchB
+        // execJava(args.plus("-db", "9"));
     }
 
     /**
@@ -137,7 +152,68 @@ public class Build extends BuildBase {
      */
     @Description(summary = "Compile all classes.")
     public void compile() {
-        compile(true, false, false);
+        clean();
+        mkdir("temp");
+        download();
+        String classpath = "temp" +
+                File.pathSeparator + "ext/javax.servlet-api-" + JAVAX_SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/jakarta.servlet-api-" + JAKARTA_SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/slf4j-api-" + SLF4J_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
+                File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar" +
+                File.pathSeparator + "ext/asm-" + ASM_VERSION + ".jar" +
+                File.pathSeparator + javaToolsJar;
+        FileList files = files("src/main");
+        StringList args = args("-Xlint:unchecked", "-d", "temp", "-sourcepath", "src/main", "-classpath", classpath);
+        String version = getTargetJavaVersion();
+        if (version != null) {
+            args = args.plus("-target", version, "-source", version);
+        }
+        javac(args, files);
+
+        files = files("src/main/META-INF/native-image");
+        files.addAll(files("src/main/META-INF/services"));
+        copy("temp", files, "src/main");
+
+        files = files("src/test");
+        files.addAll(files("src/tools"));
+        // we don't use Junit for this test framework
+        files = files.exclude("src/test/org/h2/test/TestAllJunit.java");
+        args = args("-Xlint:unchecked", "-Xlint:deprecation",
+                "-d", "temp", "-sourcepath", "src/test" + File.pathSeparator + "src/tools",
+                "-classpath", classpath);
+        if (version != null) {
+            args = args.plus("-target", version, "-source", version);
+        }
+        javac(args, files);
+
+        files = files("src/test").
+            exclude("*.java").
+            exclude("*/package.html");
+        copy("temp", files, "src/test");
+
+        javadoc("-sourcepath", "src/main",
+                "-d", "docs/javadoc",
+                "org.h2.tools", "org.h2.jmx",
+                "-classpath",
+                "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
+                File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar");
+
+        files = files("src/main").
+            exclude("*.MF").
+            exclude("*.java").
+            exclude("*/package.html").
+            exclude("*/java.sql.Driver").
+            exclude("*.DS_Store");
+        zip("temp/org/h2/util/data.zip", files, "src/main", true, false);
     }
 
     private void compileTools() {
@@ -162,7 +238,7 @@ public class Build extends BuildBase {
         downloadTest();
         downloadUsingMaven("ext/org.jacoco.agent-" + JACOCO_VERSION + ".jar",
                 "org.jacoco", "org.jacoco.agent", JACOCO_VERSION,
-                "0fd03a8ab78af3dd03b27647067efa72690d4922");
+                "ffdd953dfe502cd7678743c75905bc3304ae2eb7");
         URI uri = URI.create("jar:"
                 + Paths.get("ext/org.jacoco.agent-" + JACOCO_VERSION + ".jar").toAbsolutePath().toUri());
         try (FileSystem fs = FileSystems.newFileSystem(uri, Collections.emptyMap())) {
@@ -173,19 +249,13 @@ public class Build extends BuildBase {
         }
         downloadUsingMaven("ext/org.jacoco.cli-" + JACOCO_VERSION + ".jar",
                 "org.jacoco", "org.jacoco.cli", JACOCO_VERSION,
-                "30155fcd37821879264365693055290dbfe984bb");
+                "b2e14234f8ab0c72d9ed599d2f01d21f453fecc0");
         downloadUsingMaven("ext/org.jacoco.core-" + JACOCO_VERSION + ".jar",
                 "org.jacoco", "org.jacoco.core", JACOCO_VERSION,
-                "1ac96769aa83e5492d1a1a694774f6baec4eb704");
+                "669a338279c3f40b154a64c624bab625664a00e6");
         downloadUsingMaven("ext/org.jacoco.report-" + JACOCO_VERSION + ".jar",
                 "org.jacoco", "org.jacoco.report", JACOCO_VERSION,
-                "421e4aab2aaa809d1e66a96feb11f61ea698da19");
-        downloadUsingMaven("ext/asm-commons-" + ASM_VERSION + ".jar",
-                "org.ow2.asm", "asm-commons", ASM_VERSION,
-                "ca2954e8d92a05bacc28ff465b25c70e0f512497");
-        downloadUsingMaven("ext/asm-tree-" + ASM_VERSION + ".jar",
-                "org.ow2.asm", "asm-tree", ASM_VERSION,
-                "3a23cc36edaf8fc5a89cb100182758ccb5991487");
+                "c361019431d1c88e7004ba5a722e7c3f7c22194b");
         downloadUsingMaven("ext/args4j-" + ARGS4J_VERSION + ".jar",
                 "args4j", "args4j", ARGS4J_VERSION,
                 "bd87a75374a6d6523de82fef51fc3cfe9baf9fc9");
@@ -197,16 +267,18 @@ public class Build extends BuildBase {
         delete(files("coverage/bin/META-INF/versions"));
         String cp = "coverage/bin" +
             File.pathSeparator + "ext/postgresql-" + PGJDBC_VERSION + ".jar" +
-            File.pathSeparator + "ext/javax.servlet-api-" + SERVLET_VERSION + ".jar" +
+            File.pathSeparator + "ext/javax.servlet-api-" + JAVAX_SERVLET_VERSION + ".jar" +
+            File.pathSeparator + "ext/jakarta.servlet-api-" + JAKARTA_SERVLET_VERSION + ".jar" +
             File.pathSeparator + "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-            File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
+            File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
             File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
             File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
-            File.pathSeparator + "ext/org.osgi.enterprise-" + OSGI_VERSION + ".jar" +
+            File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
             File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar" +
             File.pathSeparator + "ext/slf4j-api-" + SLF4J_VERSION + ".jar" +
             File.pathSeparator + "ext/slf4j-nop-" + SLF4J_VERSION + ".jar" +
             File.pathSeparator + javaToolsJar;
+        cp = addNashornJavaScriptEngineIfNecessary(cp);
         // Run tests
         execJava(args(
                 "-Xmx128m",
@@ -271,67 +343,6 @@ public class Build extends BuildBase {
         javac(args, files);
     }
 
-    private void compile(boolean debugInfo, boolean clientOnly,
-            boolean basicResourcesOnly) {
-        clean();
-        mkdir("temp");
-        download();
-        String classpath = "temp" +
-                File.pathSeparator + "ext/javax.servlet-api-" + SERVLET_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/slf4j-api-" + SLF4J_VERSION + ".jar" +
-                File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
-                File.pathSeparator + "ext/org.osgi.enterprise-" + OSGI_VERSION + ".jar" +
-                File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar" +
-                File.pathSeparator + "ext/asm-" + ASM_VERSION + ".jar" +
-                File.pathSeparator + javaToolsJar;
-        FileList files;
-        if (clientOnly) {
-            files = files("src/main/org/h2/Driver.java");
-            files.addAll(files("src/main/org/h2/jdbc"));
-            files.addAll(files("src/main/org/h2/jdbcx"));
-        } else {
-            files = files("src/main");
-        }
-        StringList args = args();
-        if (debugInfo) {
-            args = args.plus("-Xlint:unchecked",
-                    "-d", "temp", "-sourcepath", "src/main", "-classpath", classpath);
-        } else {
-            args = args.plus("-Xlint:unchecked", "-g:none",
-                    "-d", "temp", "-sourcepath", "src/main", "-classpath", classpath);
-        }
-        String version = getTargetJavaVersion();
-        if (version != null) {
-            args = args.plus("-target", version, "-source", version);
-        }
-        javac(args, files);
-
-        files = files("src/main/META-INF/services");
-        copy("temp", files, "src/main");
-
-        if (!clientOnly) {
-            files = files("src/test");
-            files.addAll(files("src/tools"));
-            //we don't use Junit for this test framework
-            files = files.exclude("src/test/org/h2/test/TestAllJunit.java");
-            args = args("-Xlint:unchecked", "-Xlint:deprecation",
-                    "-d", "temp", "-sourcepath", "src/test" + File.pathSeparator + "src/tools",
-                    "-classpath", classpath);
-            if (version != null) {
-                args = args.plus("-target", version, "-source", version);
-            }
-            javac(args, files);
-            files = files("src/test").
-                exclude("*.java").
-                exclude("*/package.html");
-            copy("temp", files, "src/test");
-        }
-        resources(clientOnly, basicResourcesOnly);
-    }
-
     private static void filter(String source, String target, String old,
             String replacement) {
         String text = new String(readFile(Paths.get(source)));
@@ -351,7 +362,6 @@ public class Build extends BuildBase {
         java("org.h2.build.code.CheckJavadoc", null);
         java("org.h2.build.code.CheckTextFiles", null);
         java("org.h2.build.doc.GenerateDoc", null);
-        java("org.h2.build.doc.GenerateHelp", null);
         java("org.h2.build.indexer.Indexer", null);
         java("org.h2.build.doc.MergeDocs", null);
         java("org.h2.build.doc.WebSite", null);
@@ -372,36 +382,42 @@ public class Build extends BuildBase {
     }
 
     private void downloadOrVerify(boolean offline) {
-        downloadOrVerify("ext/javax.servlet-api-" + SERVLET_VERSION + ".jar",
-                "javax/servlet", "javax.servlet-api", SERVLET_VERSION,
+        downloadOrVerify("ext/javax.servlet-api-" + JAVAX_SERVLET_VERSION + ".jar",
+                "javax/servlet", "javax.servlet-api", JAVAX_SERVLET_VERSION,
                 "a27082684a2ff0bf397666c3943496c44541d1ca", offline);
+        downloadOrVerify("ext/jakarta.servlet-api-" + JAKARTA_SERVLET_VERSION + ".jar",
+                "jakarta/servlet", "jakarta.servlet-api", JAKARTA_SERVLET_VERSION,
+                "2e6b8ccde55522c879434ddec3714683ccae6867", offline);
         downloadOrVerify("ext/lucene-core-" + LUCENE_VERSION + ".jar",
                 "org/apache/lucene", "lucene-core", LUCENE_VERSION,
-                "f6da40436d3633de272810fae1e339c237adfcf6", offline);
-        downloadOrVerify("ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar",
-                "org/apache/lucene", "lucene-analyzers-common", LUCENE_VERSION,
-                "8e8abc90572ed74b110c75b546c675153aecc570", offline);
+                "ad391210ffd806931334be9670a35af00c56f959", offline);
+        downloadOrVerify("ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar",
+                "org/apache/lucene", "lucene-analysis-common", LUCENE_VERSION,
+                "27ba6caaa4587a982cd451f7217b5a982bcfc44a", offline);
         downloadOrVerify("ext/lucene-queryparser-" + LUCENE_VERSION + ".jar",
                 "org/apache/lucene", "lucene-queryparser", LUCENE_VERSION,
-                "8925df7b104e78e308e236ff0740a064dd93cadd", offline);
+                "6e77bde908ff698354e4a2149e6dd4658b56d7b0", offline);
         downloadOrVerify("ext/slf4j-api-" + SLF4J_VERSION + ".jar",
                 "org/slf4j", "slf4j-api", SLF4J_VERSION,
-                "2cd9b264f76e3d087ee21bfc99305928e1bdb443", offline);
+                "41eb7184ea9d556f23e18b5cb99cad1f8581fc00", offline);
         downloadOrVerify("ext/org.osgi.core-" + OSGI_VERSION + ".jar",
                 "org/osgi", "org.osgi.core", OSGI_VERSION,
                 "6e5e8cd3c9059c08e1085540442a490b59a7783c", offline);
-        downloadOrVerify("ext/org.osgi.enterprise-" + OSGI_VERSION + ".jar",
-                "org/osgi", "org.osgi.enterprise", OSGI_VERSION,
-                "4f6e081c38b951204e2b6a60d33ab0a90bfa1ad3", offline);
+        downloadOrVerify("ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar",
+                "org/osgi", "org.osgi.service.jdbc", OSGI_JDBC_VERSION,
+                "07673601d60c98d876b82530ff4363ed9e428c1e", offline);
         downloadOrVerify("ext/jts-core-" + JTS_VERSION + ".jar",
                 "org/locationtech/jts", "jts-core", JTS_VERSION,
-                "c4922e3566568f49a9219b9f9ece9049ee994c50", offline);
+                "3ff3baa0074445384f9e0068df81fbd0a168395a", offline);
         downloadOrVerify("ext/junit-jupiter-api-" + JUNIT_VERSION + ".jar",
                 "org.junit.jupiter", "junit-jupiter-api", JUNIT_VERSION,
-                "6393db7e4c0265152d8fc4ff146633d1a7d36c47", offline);
+                "2fe4ba3d31d5067878e468c96aa039005a9134d3", offline);
         downloadUsingMaven("ext/asm-" + ASM_VERSION + ".jar",
                 "org.ow2.asm", "asm", ASM_VERSION,
-                "fa637eb67eb7628c915d73762b681ae7ff0b9731");
+                "dc6ea1875f4d64fbc85e1691c95b96a3d8569c90");
+        downloadUsingMaven("ext/apiguardian-" + APIGUARDIAN_VERSION + ".jar",
+                "org.apiguardian", "apiguardian-api", APIGUARDIAN_VERSION,
+                "a231e0d844d2721b0fa1b238006d15c6ded6842a");
     }
 
     private void downloadOrVerify(String target, String group, String artifact,
@@ -429,7 +445,22 @@ public class Build extends BuildBase {
         // for TestTraceSystem
         downloadUsingMaven("ext/slf4j-nop-" + SLF4J_VERSION + ".jar",
                 "org/slf4j", "slf4j-nop", SLF4J_VERSION,
-                "e427e2f69d0a8508994e0a754a44d5212fa38b56");
+                "a5b48a1a935615f0cc70148267bc0f6c4e437239");
+        // for TestTriggersConstraints
+        if (requiresNashornJavaScriptEngine()) {
+            downloadUsingMaven("ext/nashorn-core-" + NASHORN_VERSION + ".jar",
+                    "org/openjdk/nashorn", "nashorn-core", NASHORN_VERSION,
+                    "f67f5ffaa5f5130cf6fb9b133da00c7df3b532a5");
+            downloadUsingMaven("ext/asm-util-" + ASM_VERSION + ".jar",
+                    "org.ow2.asm", "asm-util", ASM_VERSION,
+                    "64b5a1fc8c1b15ed2efd6a063e976bc8d3dc5ffe");
+        }
+        downloadUsingMaven("ext/asm-commons-" + ASM_VERSION + ".jar",
+                "org.ow2.asm", "asm-commons", ASM_VERSION,
+                "19ab5b5800a3910d30d3a3e64fdb00fd0cb42de0");
+        downloadUsingMaven("ext/asm-tree-" + ASM_VERSION + ".jar",
+                "org.ow2.asm", "asm-tree", ASM_VERSION,
+                "fd33c8b6373abaa675be407082fdfda35021254a");
     }
 
     private static String getVersion() {
@@ -449,7 +480,7 @@ public class Build extends BuildBase {
         jar();
         docs();
         try {
-            exec("soffice", args("-invisible", "macro:///Standard.Module1.H2Pdf"));
+            exec("soffice", args("--invisible", "macro:///Standard.Module1.H2Pdf"));
             copy("docs", files("../h2web/h2.pdf"), "../h2web");
         } catch (Exception e) {
             println("OpenOffice / LibreOffice is not available or macros H2Pdf is not installed:");
@@ -474,7 +505,7 @@ public class Build extends BuildBase {
         zip("../h2web/h2.zip", files, "../", false, false);
         boolean installer = false;
         try {
-            exec("makensis", args("/v2", "src/installer/h2.nsi"));
+            exec("makensis", args(isWindows() ? "/V2" : "-V2", "src/installer/h2.nsi"));
             installer = true;
         } catch (Exception e) {
             println("NSIS is not available: " + e);
@@ -521,15 +552,10 @@ public class Build extends BuildBase {
     }
 
     /**
-     * Add META-INF/versions for Java 9+.
-     *
-     * @param addNetUtils include NetUtils2 implementation
+     * Add META-INF/versions for newer versions of Java.
      */
-    private void addVersions(boolean addNetUtils) {
-        copy("temp/META-INF/versions/9", files("src/java9/precompiled"), "src/java9/precompiled");
-        if (addNetUtils) {
-            copy("temp/META-INF/versions/10", files("src/java10/precompiled"), "src/java10/precompiled");
-        }
+    private void addVersions() {
+        copy("temp/META-INF/versions/21", files("src/java21/precompiled"), "src/java21/precompiled");
     }
 
     /**
@@ -538,7 +564,7 @@ public class Build extends BuildBase {
     @Description(summary = "Create the regular h2.jar file.")
     public void jar() {
         compile();
-        addVersions(true);
+        addVersions();
         manifest("src/main/META-INF/MANIFEST.MF");
         FileList files = files("temp").
             exclude("temp/org/h2/build/*").
@@ -561,79 +587,17 @@ public class Build extends BuildBase {
     }
 
     /**
-     * Create the h2client.jar. This only contains the remote JDBC
-     * implementation.
-     */
-    @Description(summary = "Create h2client.jar with only the remote JDBC implementation.")
-    public void jarClient() {
-        compile(true, true, false);
-        addVersions(false);
-        manifest("src/installer/client/MANIFEST.MF");
-        FileList files = files("temp").
-            exclude("temp/org/h2/build/*").
-            exclude("temp/org/h2/dev/*").
-            exclude("temp/org/h2/java/*").
-            exclude("temp/org/h2/jcr/*").
-            exclude("temp/org/h2/mode/*").
-            exclude("temp/org/h2/samples/*").
-            exclude("temp/org/h2/test/*").
-            exclude("*.bat").
-            exclude("*.sh").
-            exclude("*.txt").
-            exclude("*.DS_Store");
-        files = excludeTestMetaInfFiles(files);
-        long kb = jar("bin/h2-client" + getJarSuffix(), files, "temp");
-        if (kb < 400 || kb > 600) {
-            throw new RuntimeException("Expected file size 400 - 600 KB, got: " + kb);
-        }
-    }
-
-    /**
      * Create the file h2mvstore.jar. This only contains the MVStore.
      */
     @Description(summary = "Create h2mvstore.jar containing only the MVStore.")
     public void jarMVStore() {
         compileMVStore(true);
-        addVersions(false);
+        addVersions();
         manifest("src/installer/mvstore/MANIFEST.MF");
         FileList files = files("temp");
         files.exclude("*.DS_Store");
         files = excludeTestMetaInfFiles(files);
         jar("bin/h2-mvstore" + getJarSuffix(), files, "temp");
-    }
-
-    /**
-     * Create the file h2small.jar. This only contains the embedded database.
-     * Debug information is disabled.
-     */
-    @Description(summary = "Create h2small.jar containing only the embedded database.")
-    public void jarSmall() {
-        compile(false, false, true);
-        addVersions(false);
-        manifest("src/installer/small/MANIFEST.MF");
-        FileList files = files("temp").
-            exclude("temp/org/h2/build/*").
-            exclude("temp/org/h2/dev/*").
-            exclude("temp/org/h2/jcr/*").
-            exclude("temp/org/h2/java/*").
-            exclude("temp/org/h2/jcr/*").
-            exclude("temp/org/h2/samples/*").
-            exclude("temp/org/h2/server/ftp/*").
-            exclude("temp/org/h2/test/*").
-            exclude("temp/org/h2/bnf/*").
-            exclude("temp/org/h2/fulltext/*").
-            exclude("temp/org/h2/jdbcx/*").
-            exclude("temp/org/h2/jmx/*").
-            exclude("temp/org/h2/server/*").
-            exclude("temp/org/h2/tools/*").
-            exclude("*.bat").
-            exclude("*.sh").
-            exclude("*.txt").
-            exclude("*.DS_Store");
-        files = excludeTestMetaInfFiles(files);
-        files.add(Paths.get("temp/org/h2/tools/DeleteDbFiles.class"));
-        files.add(Paths.get("temp/org/h2/tools/CompressTool.class"));
-        jar("bin/h2small" + getJarSuffix(), files, "temp");
     }
 
     /**
@@ -644,16 +608,17 @@ public class Build extends BuildBase {
         compileTools();
         delete("docs");
         mkdir("docs/javadoc");
-        javadoc("-sourcepath", "src/main", "org.h2.jdbc", "org.h2.jdbcx",
+        javadoc("-sourcepath", "src/main",
+                "-d", "docs/javadoc",
+                "org.h2.jdbc", "org.h2.jdbcx",
                 "org.h2.tools", "org.h2.api", "org.h2.engine", "org.h2.fulltext",
                 "-classpath",
                 "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar",
-                "-docletpath", "bin" + File.pathSeparator + "temp",
-                "-doclet", "org.h2.build.doclet.Doclet");
-        copy("docs/javadoc", files("src/docsrc/javadoc"), "src/docsrc/javadoc");
+                File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
+                File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar");
     }
 
     /**
@@ -665,39 +630,39 @@ public class Build extends BuildBase {
         mkdir("docs/javadocImpl2");
         javadoc("-sourcepath", "src/main" +
                 // need to be disabled if not enough memory
-                // File.pathSeparator + "src/test" +
+                File.pathSeparator + "src/test" +
                 File.pathSeparator + "src/tools",
-                // need to be disabled for java 7
-                "-Xdoclint:none",
                 "-noindex",
-                "-tag", "h2.resource",
                 "-d", "docs/javadocImpl2",
                 "-classpath", javaToolsJar +
                 File.pathSeparator + "ext/slf4j-api-" + SLF4J_VERSION + ".jar" +
-                File.pathSeparator + "ext/javax.servlet-api-" + SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/javax.servlet-api-" + JAVAX_SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/jakarta.servlet-api-" + JAKARTA_SERVLET_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
-                File.pathSeparator + "ext/org.osgi.enterprise-" + OSGI_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
                 File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar" +
                 File.pathSeparator + "ext/asm-" + ASM_VERSION + ".jar" +
-                File.pathSeparator + "ext/junit-jupiter-api-" + JUNIT_VERSION + ".jar",
-                "-subpackages", "org.h2");
+                File.pathSeparator + "ext/junit-jupiter-api-" + JUNIT_VERSION + ".jar" +
+                File.pathSeparator + "ext/apiguardian-api-" + APIGUARDIAN_VERSION + ".jar",
+                "-subpackages", "org.h2",
+                "-exclude", "org.h2.dev:org.h2.java:org.h2.test:org.h2.build.code:org.h2.build.doc");
 
         mkdir("docs/javadocImpl3");
         javadoc("-sourcepath", "src/main",
                 "-noindex",
-                "-tag", "h2.resource",
                 "-d", "docs/javadocImpl3",
                 "-classpath", javaToolsJar +
                 File.pathSeparator + "ext/slf4j-api-" + SLF4J_VERSION + ".jar" +
-                File.pathSeparator + "ext/javax.servlet-api-" + SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/javax.servlet-api-" + JAVAX_SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/jakarta.servlet-api-" + JAKARTA_SERVLET_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
-                File.pathSeparator + "ext/org.osgi.enterprise-" + OSGI_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
                 File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar",
                 "-subpackages", "org.h2.mvstore",
                 "-exclude", "org.h2.mvstore.db");
@@ -707,22 +672,23 @@ public class Build extends BuildBase {
         javadoc("-sourcepath", "src/main" +
                 File.pathSeparator + "src/test" +
                 File.pathSeparator + "src/tools",
+                "-Xdoclint:all,-missing",
+                "-d", "docs/javadoc",
                 "-classpath", javaToolsJar +
                 File.pathSeparator + "ext/slf4j-api-" + SLF4J_VERSION + ".jar" +
-                File.pathSeparator + "ext/javax.servlet-api-" + SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/javax.servlet-api-" + JAVAX_SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/jakarta.servlet-api-" + JAKARTA_SERVLET_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
-                File.pathSeparator + "ext/org.osgi.enterprise-" + OSGI_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
                 File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar" +
                 File.pathSeparator + "ext/asm-" + ASM_VERSION + ".jar" +
-                File.pathSeparator + "ext/junit-jupiter-api-" + JUNIT_VERSION + ".jar",
+                File.pathSeparator + "ext/junit-jupiter-api-" + JUNIT_VERSION + ".jar" +
+                File.pathSeparator + "ext/apiguardian-api-" + APIGUARDIAN_VERSION + ".jar",
                 "-subpackages", "org.h2",
-                "-package",
-                "-docletpath", "bin" + File.pathSeparator + "temp",
-                "-doclet", "org.h2.build.doclet.Doclet");
-        copy("docs/javadocImpl", files("src/docsrc/javadoc"), "src/docsrc/javadoc");
+                "-package");
     }
 
     private static void manifest(String path) {
@@ -808,7 +774,7 @@ public class Build extends BuildBase {
                 exclude("docs/org/h2/mvstore/db/*").
                 keep("*.java");
         files.addAll(files("docs").keep("docs/META-INF/*"));
-        manifest = new String(readFile(Paths.get("src/installer/source-manifest.mf")));
+        manifest = new String(readFile(Paths.get("src/installer/source-mvstore-manifest.mf")));
         manifest = replaceAll(manifest, "${version}", getVersion());
         writeFile(Paths.get("docs/META-INF/MANIFEST.MF"), manifest.getBytes());
         jar("docs/h2-mvstore-" + getVersion() + "-sources.jar", files, "docs");
@@ -869,11 +835,11 @@ public class Build extends BuildBase {
         // MVStore
         jarMVStore();
         String pom = new String(readFile(Paths.get("src/installer/pom-mvstore-template.xml")));
-        pom = replaceAll(pom, "@version@", "1.0-SNAPSHOT");
+        pom = replaceAll(pom, "@version@", getVersion());
         writeFile(Paths.get("bin/pom.xml"), pom.getBytes());
         execScript("mvn", args(
                 "install:install-file",
-                "-Dversion=1.0-SNAPSHOT",
+                "-Dversion=" + getVersion(),
                 "-Dfile=bin/h2-mvstore" + getJarSuffix(),
                 "-Dpackaging=jar",
                 "-DpomFile=bin/pom.xml",
@@ -882,11 +848,11 @@ public class Build extends BuildBase {
         // database
         jar();
         pom = new String(readFile(Paths.get("src/installer/pom-template.xml")));
-        pom = replaceAll(pom, "@version@", "1.0-SNAPSHOT");
+        pom = replaceAll(pom, "@version@", getVersion());
         writeFile(Paths.get("bin/pom.xml"), pom.getBytes());
         execScript("mvn", args(
                 "install:install-file",
-                "-Dversion=1.0-SNAPSHOT",
+                "-Dversion=" + getVersion(),
                 "-Dfile=bin/h2" + getJarSuffix(),
                 "-Dpackaging=jar",
                 "-DpomFile=bin/pom.xml",
@@ -909,36 +875,6 @@ public class Build extends BuildBase {
         }
     }
 
-    private void resources(boolean clientOnly, boolean basicOnly) {
-        if (!clientOnly) {
-            java("org.h2.build.doc.GenerateHelp", null);
-            javadoc("-sourcepath", "src/main", "org.h2.tools", "org.h2.jmx",
-                    "-classpath",
-                    "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-                    File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
-                    File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
-                    File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar",
-                    "-docletpath", "bin" + File.pathSeparator + "temp",
-                    "-doclet", "org.h2.build.doclet.ResourceDoclet");
-        }
-        FileList files = files("src/main").
-            exclude("*.MF").
-            exclude("*.java").
-            exclude("*/package.html").
-            exclude("*/java.sql.Driver").
-            exclude("*.DS_Store");
-        if (basicOnly) {
-            files = files.keep("src/main/org/h2/res/_messages_en.*");
-        }
-        if (clientOnly) {
-            files = files.exclude("src/main/org/h2/res/help.csv");
-            files = files.exclude("src/main/org/h2/res/h2*");
-            files = files.exclude("src/main/org/h2/res/javadoc.properties");
-            files = files.exclude("src/main/org/h2/server/*");
-        }
-        zip("temp/org/h2/util/data.zip", files, "src/main", true, false);
-    }
-
     /**
      * Just run the spellchecker.
      */
@@ -958,41 +894,46 @@ public class Build extends BuildBase {
     /**
      * Compile and run all fast tests. This does not include the compile step.
      */
-    @Description(summary = "Compile and run all tests for Travis (excl. the compile step).")
-    public void testTravis() {
+    @Description(summary = "Compile and run all tests for CI (excl. the compile step).")
+    public void testCI() {
         test(true);
     }
 
-    private void test(boolean travis) {
+    private void test(boolean ci) {
         downloadTest();
         String cp = "temp" + File.pathSeparator + "bin" +
                 File.pathSeparator + "ext/postgresql-" + PGJDBC_VERSION + ".jar" +
-                File.pathSeparator + "ext/javax.servlet-api-" + SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/javax.servlet-api-" + JAVAX_SERVLET_VERSION + ".jar" +
+                File.pathSeparator + "ext/jakarta.servlet-api-" + JAKARTA_SERVLET_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-core-" + LUCENE_VERSION + ".jar" +
-                File.pathSeparator + "ext/lucene-analyzers-common-" + LUCENE_VERSION + ".jar" +
+                File.pathSeparator + "ext/lucene-analysis-common-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/lucene-queryparser-" + LUCENE_VERSION + ".jar" +
                 File.pathSeparator + "ext/org.osgi.core-" + OSGI_VERSION + ".jar" +
-                File.pathSeparator + "ext/org.osgi.enterprise-" + OSGI_VERSION + ".jar" +
+                File.pathSeparator + "ext/org.osgi.service.jdbc-" + OSGI_JDBC_VERSION + ".jar" +
                 File.pathSeparator + "ext/jts-core-" + JTS_VERSION + ".jar" +
                 File.pathSeparator + "ext/slf4j-api-" + SLF4J_VERSION + ".jar" +
                 File.pathSeparator + "ext/slf4j-nop-" + SLF4J_VERSION + ".jar" +
                 File.pathSeparator + "ext/asm-" + ASM_VERSION + ".jar" +
                 File.pathSeparator + javaToolsJar;
+        cp = addNashornJavaScriptEngineIfNecessary(cp);
         int version = getJavaVersion();
         if (version >= 9) {
             cp = "src/java9/precompiled" + File.pathSeparator + cp;
             if (version >= 10) {
                 cp = "src/java10/precompiled" + File.pathSeparator + cp;
+                if (version >= 21) {
+                    cp = "src/java21/precompiled" + File.pathSeparator + cp;
+                }
             }
         }
         int ret;
-        if (travis) {
+        if (ci) {
             ret = execJava(args(
                     "-ea",
                     "-Xmx128m",
                     "-XX:MaxDirectMemorySize=2g",
                     "-cp", cp,
-                    "org.h2.test.TestAll", "travis"));
+                    "org.h2.test.TestAll", "ci"));
         } else {
             ret = execJava(args(
                     "-ea",
@@ -1000,7 +941,7 @@ public class Build extends BuildBase {
                     "-cp", cp,
                     "org.h2.test.TestAll"));
         }
-        // return a failure code for Jenkins/Travis/CI builds
+        // return a failure code for CI builds
         if (ret != 0) {
             System.exit(ret);
         }
@@ -1196,6 +1137,21 @@ public class Build extends BuildBase {
         }
         local = replaceAll(local, "${user.home}", userHome);
         return local;
+    }
+
+    private static String addNashornJavaScriptEngineIfNecessary(String cp) {
+        if (requiresNashornJavaScriptEngine()) {
+            return cp +
+                    File.pathSeparator + "ext/nashorn-core-" + NASHORN_VERSION + ".jar" +
+                    File.pathSeparator + "ext/asm-commons-" + ASM_VERSION + ".jar" +
+                    File.pathSeparator + "ext/asm-tree-" + ASM_VERSION + ".jar" +
+                    File.pathSeparator + "ext/asm-util-" + ASM_VERSION + ".jar";
+        }
+        return cp;
+    }
+
+    private static boolean requiresNashornJavaScriptEngine() {
+        return getJavaVersion() >= 15; // Nashorn was removed in Java 15
     }
 
 }

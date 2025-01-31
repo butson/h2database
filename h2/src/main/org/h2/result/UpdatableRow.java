@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -12,14 +12,18 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 
 import org.h2.api.ErrorCode;
+import org.h2.engine.Constants;
+import org.h2.engine.Session;
+import org.h2.engine.SessionRemote;
 import org.h2.jdbc.JdbcConnection;
+import org.h2.jdbc.JdbcResultSet;
 import org.h2.message.DbException;
 import org.h2.util.JdbcUtils;
 import org.h2.util.StringUtils;
 import org.h2.util.Utils;
-import org.h2.value.DataType;
 import org.h2.value.Value;
 import org.h2.value.ValueNull;
+import org.h2.value.ValueToObjectConverter;
 
 /**
  * This class is used for updatable result sets. An updatable row provides
@@ -41,12 +45,16 @@ public class UpdatableRow {
      *
      * @param conn the database connection
      * @param result the result
+     * @throws SQLException on failure
      */
     public UpdatableRow(JdbcConnection conn, ResultInterface result)
             throws SQLException {
         this.conn = conn;
         this.result = result;
         columnCount = result.getVisibleColumnCount();
+        if (columnCount == 0) {
+            return;
+        }
         for (int i = 0; i < columnCount; i++) {
             String t = result.getTableName(i);
             String s = result.getSchemaName(i);
@@ -64,16 +72,18 @@ public class UpdatableRow {
                 return;
             }
         }
+        String type = "BASE TABLE";
+        Session session = conn.getSession();
+        if (session instanceof SessionRemote
+                && ((SessionRemote) session).getClientVersion() <= Constants.TCP_PROTOCOL_VERSION_19) {
+            type = "TABLE";
+        }
         final DatabaseMetaData meta = conn.getMetaData();
         ResultSet rs = meta.getTables(null,
                 StringUtils.escapeMetaDataPattern(schemaName),
                 StringUtils.escapeMetaDataPattern(tableName),
-                new String[] { "TABLE" });
+                new String[] { type });
         if (!rs.next()) {
-            return;
-        }
-        if (rs.getString("SQL") == null) {
-            // system table
             return;
         }
         String table = rs.getString("TABLE_NAME");
@@ -217,6 +227,7 @@ public class UpdatableRow {
      *
      * @param row the values that contain the key
      * @return the row
+     * @throws SQLException on failure
      */
     public Value[] readRow(Value[] row) throws SQLException {
         StringBuilder builder = new StringBuilder("SELECT ");
@@ -226,14 +237,13 @@ public class UpdatableRow {
         appendKeyCondition(builder);
         PreparedStatement prep = conn.prepareStatement(builder.toString());
         setKey(prep, 1, row);
-        ResultSet rs = prep.executeQuery();
+        JdbcResultSet rs = (JdbcResultSet) prep.executeQuery();
         if (!rs.next()) {
             throw DbException.get(ErrorCode.NO_DATA_AVAILABLE);
         }
         Value[] newRow = new Value[columnCount];
         for (int i = 0; i < columnCount; i++) {
-            int type = result.getColumnType(i).getValueType();
-            newRow[i] = DataType.readValue(conn.getSession(), rs, i + 1, type);
+            newRow[i] = ValueToObjectConverter.readValue(conn.getSession(), rs, i + 1);
         }
         return newRow;
     }

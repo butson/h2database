@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -19,6 +19,7 @@ import org.h2.engine.CastDataProvider;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 import org.h2.util.DateTimeUtils;
+import org.h2.util.JSR310Utils;
 import org.h2.util.LegacyDateTimeUtils;
 import org.h2.util.TimeZoneProvider;
 import org.h2.value.TypeInfo;
@@ -158,7 +159,7 @@ public class TestTimeStampWithTimeZone extends TestDb {
                         + " from test5"
                         + " where (t1 < ?)");
         Value value = ValueTimestampTimeZone.parse("2016-12-24 00:00:00.000000001+00:01", null);
-        preparedStatement.setObject(1, value.getObject());
+        preparedStatement.setObject(1, JSR310Utils.valueToOffsetDateTime(value, null));
 
         ResultSet rs = preparedStatement.executeQuery();
 

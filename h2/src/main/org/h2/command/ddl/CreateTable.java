@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,7 +13,7 @@ import org.h2.command.dml.Insert;
 import org.h2.command.query.Query;
 import org.h2.engine.Database;
 import org.h2.engine.DbObject;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.message.DbException;
 import org.h2.schema.Schema;
@@ -34,10 +34,9 @@ public class CreateTable extends CommandWithColumns {
     private boolean onCommitTruncate;
     private Query asQuery;
     private String comment;
-    private boolean sortedInsertMode;
     private boolean withNoData;
 
-    public CreateTable(Session session, Schema schema) {
+    public CreateTable(SessionLocal session, Schema schema) {
         super(session, schema);
         data.persistIndexes = true;
         data.persistData = true;
@@ -69,19 +68,23 @@ public class CreateTable extends CommandWithColumns {
     }
 
     @Override
-    public int update() {
-        if (!transactional) {
-            session.commit(true);
+    public long update() {
+        Schema schema = getSchema();
+        boolean isSessionTemporary = data.temporary && !data.globalTemporary;
+        Database db = getDatabase();
+        String tableEngine = data.tableEngine;
+        if (tableEngine != null || db.getSettings().defaultTableEngine != null) {
+            session.getUser().checkAdmin();
+        } else if (!isSessionTemporary) {
+            session.getUser().checkSchemaOwner(schema);
         }
-        Database db = session.getDatabase();
         if (!db.isPersistent()) {
             data.persistIndexes = false;
         }
-        boolean isSessionTemporary = data.temporary && !data.globalTemporary;
         if (!isSessionTemporary) {
             db.lockMeta(session);
         }
-        if (getSchema().resolveTableOrView(session, data.tableName) != null) {
+        if (schema.resolveTableOrView(session, data.tableName) != null) {
             if (ifNotExists) {
                 return 0;
             }
@@ -105,9 +108,8 @@ public class CreateTable extends CommandWithColumns {
         }
         changePrimaryKeysToNotNull(data.columns);
         data.id = getObjectId();
-        data.create = create;
         data.session = session;
-        Table table = getSchema().createTable(data);
+        Table table = schema.createTable(data);
         ArrayList<Sequence> sequences = generateSequences(data.columns, data.temporary);
         table.setComment(comment);
         if (isSessionTemporary) {
@@ -124,29 +126,12 @@ public class CreateTable extends CommandWithColumns {
         }
         try {
             for (Column c : data.columns) {
-                c.prepareExpression(session);
+                c.prepareExpressions(session);
             }
             for (Sequence sequence : sequences) {
                 table.addSequence(sequence);
             }
             createConstraints();
-            if (asQuery != null && !withNoData) {
-                boolean old = session.isUndoLogEnabled();
-                try {
-                    session.setUndoLogEnabled(false);
-                    session.startStatementWithinTransaction(null);
-                    Insert insert = new Insert(session);
-                    insert.setSortedInsertMode(sortedInsertMode);
-                    insert.setQuery(asQuery);
-                    insert.setTable(table);
-                    insert.setInsertFromSelect(true);
-                    insert.prepare();
-                    insert.update();
-                } finally {
-                    session.endStatement();
-                    session.setUndoLogEnabled(old);
-                }
-            }
             HashSet<DbObject> set = new HashSet<>();
             table.addDependencies(set);
             for (DbObject obj : set) {
@@ -168,6 +153,9 @@ public class CreateTable extends CommandWithColumns {
                     }
                 }
             }
+            if (asQuery != null && !withNoData) {
+                insertAsData(isSessionTemporary, db, table);
+            }
         } catch (DbException e) {
             try {
                 db.checkPowerOff();
@@ -183,13 +171,53 @@ public class CreateTable extends CommandWithColumns {
         return 0;
     }
 
+    /** This is called from REFRESH MATERIALIZED VIEW */
+    void insertAsData(Table table) {
+        insertAsData(false, getDatabase(), table);
+    }
+
+    /** Insert data for the CREATE TABLE .. AS */
+    private void insertAsData(boolean isSessionTemporary, Database db, Table table) {
+        boolean flushSequences = false;
+        if (!isSessionTemporary) {
+            db.unlockMeta(session);
+            for (Column c : table.getColumns()) {
+                Sequence s = c.getSequence();
+                if (s != null) {
+                    flushSequences = true;
+                    s.setTemporary(true);
+                }
+            }
+        }
+        try {
+            session.startStatementWithinTransaction(null);
+            Insert insert = new Insert(session);
+            insert.setQuery(asQuery);
+            insert.setTable(table);
+            insert.setInsertFromSelect(true);
+            insert.prepare();
+            insert.update();
+        } finally {
+            session.endStatement();
+        }
+        if (flushSequences) {
+            db.lockMeta(session);
+            for (Column c : table.getColumns()) {
+                Sequence s = c.getSequence();
+                if (s != null) {
+                    s.setTemporary(false);
+                    s.flush(session);
+                }
+            }
+        }
+    }
+
     private void generateColumnsFromQuery() {
         int columnCount = asQuery.getColumnCount();
         ArrayList<Expression> expressions = asQuery.getExpressions();
         for (int i = 0; i < columnCount; i++) {
             Expression expr = expressions.get(i);
-            Column col = new Column(expr.getColumnNameForView(session, i), expr.getType());
-            addColumn(col);
+            addColumn(new Column(expr.getColumnNameForView(session, i, false), expr.getType()));
         }
     }
 
@@ -226,10 +254,6 @@ public class CreateTable extends CommandWithColumns {
         }
     }
 
-    public void setSortedInsertMode(boolean sortedInsertMode) {
-        this.sortedInsertMode = sortedInsertMode;
-    }
-
     public void setWithNoData(boolean withNoData) {
         this.withNoData = withNoData;
     }
@@ -240,10 +264,6 @@ public class CreateTable extends CommandWithColumns {
 
     public void setTableEngineParams(ArrayList<String> tableEngineParams) {
         data.tableEngineParams = tableEngineParams;
-    }
-
-    public void setHidden(boolean isHidden) {
-        data.isHidden = isHidden;
     }
 
     @Override

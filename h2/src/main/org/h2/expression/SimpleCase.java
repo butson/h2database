@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.table.ColumnResolver;
 import org.h2.table.TableFilter;
 import org.h2.value.TypeInfo;
@@ -15,7 +15,7 @@ import org.h2.value.ValueNull;
 /**
  * A simple case.
  */
-public class SimpleCase extends Expression {
+public final class SimpleCase extends Expression {
 
     public static final class SimpleWhen {
 
@@ -25,12 +25,16 @@ public class SimpleCase extends Expression {
 
         SimpleWhen next;
 
+        public SimpleWhen(Expression operand, Expression result) {
+            this(new Expression[] { operand }, result);
+        }
+
         public SimpleWhen(Expression[] operands, Expression result) {
             this.operands = operands;
             this.result = result;
         }
 
-        public void addWhen(SimpleWhen next) {
+        public void setWhen(SimpleWhen next) {
             this.next = next;
         }
 
@@ -50,25 +54,13 @@ public class SimpleCase extends Expression {
         this.elseResult = elseResult;
     }
 
-    /**
-     * Adds an else clause.
-     *
-     * @param result
-     *            the result
-     */
-    public void addElse(Expression result) {
-        elseResult = result;
-    }
-
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         Value v = operand.getValue(session);
-        if (v != ValueNull.INSTANCE) {
-            for (SimpleWhen when = this.when; when != null; when = when.next) {
-                for (Expression e : when.operands) {
-                    if (session.areEqual(v, e.getValue(session))) {
-                        return when.result.getValue(session).convertTo(type, session);
-                    }
+        for (SimpleWhen when = this.when; when != null; when = when.next) {
+            for (Expression e : when.operands) {
+                if (e.getWhenValue(session, v)) {
+                    return when.result.getValue(session).convertTo(type, session);
                 }
             }
         }
@@ -79,27 +71,25 @@ public class SimpleCase extends Expression {
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         TypeInfo typeInfo = TypeInfo.TYPE_UNKNOWN;
         operand = operand.optimize(session);
         boolean allConst = operand.isConstant();
         Value v = null;
         if (allConst) {
             v = operand.getValue(session);
-            if (v == ValueNull.INSTANCE) {
-                if (elseResult != null) {
-                    return elseResult.optimize(session);
-                }
-                return ValueExpression.NULL;
-            }
         }
+        TypeInfo operandType = operand.getType();
         for (SimpleWhen when = this.when; when != null; when = when.next) {
             Expression[] operands = when.operands;
             for (int i = 0; i < operands.length; i++) {
                 Expression e = operands[i].optimize(session);
+                if (!e.isWhenConditionOperand()) {
+                    TypeInfo.checkComparable(operandType, e.getType());
+                }
                 if (allConst) {
                     if (e.isConstant()) {
-                        if (session.areEqual(v, e.getValue(session))) {
+                        if (e.getWhenValue(session, v)) {
                             return when.result.optimize(session);
                         }
                     } else {
@@ -127,7 +117,7 @@ public class SimpleCase extends Expression {
         return this;
     }
 
-    public static TypeInfo combineTypes(TypeInfo typeInfo, Expression e) {
+    static TypeInfo combineTypes(TypeInfo typeInfo, Expression e) {
         if (!e.isNullConstant()) {
             TypeInfo type = e.getType();
             int valueType = type.getValueType();
@@ -139,21 +129,21 @@ public class SimpleCase extends Expression {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
-        operand.getSQL(builder.append("CASE "), sqlFlags);
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
+        operand.getUnenclosedSQL(builder.append("CASE "), sqlFlags);
         for (SimpleWhen when = this.when; when != null; when = when.next) {
-            builder.append(" WHEN ");
+            builder.append(" WHEN");
             Expression[] operands = when.operands;
             for (int i = 0, len = operands.length; i < len; i++) {
                 if (i > 0) {
-                    builder.append(", ");
+                    builder.append(',');
                 }
-                operands[i].getSQL(builder, sqlFlags);
+                operands[i].getWhenSQL(builder, sqlFlags);
             }
-            when.result.getSQL(builder.append(" THEN "), sqlFlags);
+            when.result.getUnenclosedSQL(builder.append(" THEN "), sqlFlags);
         }
         if (elseResult != null) {
-            elseResult.getSQL(builder.append(" ELSE "), sqlFlags);
+            elseResult.getUnenclosedSQL(builder.append(" ELSE "), sqlFlags);
         }
         return builder.append(" END");
     }
@@ -192,7 +182,7 @@ public class SimpleCase extends Expression {
     }
 
     @Override
-    public void updateAggregate(Session session, int stage) {
+    public void updateAggregate(SessionLocal session, int stage) {
         operand.updateAggregate(session, stage);
         for (SimpleWhen when = this.when; when != null; when = when.next) {
             for (Expression e : when.operands) {
@@ -207,20 +197,20 @@ public class SimpleCase extends Expression {
 
     @Override
     public boolean isEverything(ExpressionVisitor visitor) {
-        if (operand.isEverything(visitor)) {
+        if (!operand.isEverything(visitor)) {
             return false;
         }
         for (SimpleWhen when = this.when; when != null; when = when.next) {
             for (Expression e : when.operands) {
-                if (e.isEverything(visitor)) {
+                if (!e.isEverything(visitor)) {
                     return false;
                 }
             }
-            if (when.result.isEverything(visitor)) {
+            if (!when.result.isEverything(visitor)) {
                 return false;
             }
         }
-        if (elseResult != null && elseResult.isEverything(visitor)) {
+        if (elseResult != null && !elseResult.isEverything(visitor)) {
             return false;
         }
         return true;

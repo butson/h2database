@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -32,8 +32,8 @@ import org.h2.api.ErrorCode;
 import org.h2.command.CommandContainer;
 import org.h2.command.CommandInterface;
 import org.h2.command.Prepared;
+import org.h2.command.dml.ScriptCommand;
 import org.h2.command.query.Query;
-import org.h2.engine.SysProperties;
 import org.h2.engine.Mode.ModeEnum;
 import org.h2.jdbc.JdbcConnection;
 import org.h2.jdbc.JdbcPreparedStatement;
@@ -131,7 +131,6 @@ public class TestScript extends TestDb {
         if (!config.memory && !config.big && !config.networked) {
             testScript("testSimple.sql");
         }
-        testScript("comments.sql");
         testScript("dual.sql");
         testScript("indexes.sql");
         testScript("information_schema.sql");
@@ -140,25 +139,21 @@ public class TestScript extends TestDb {
         testScript("altertable-fk.sql");
         testScript("default-and-on_update.sql");
 
-        for (String s : new String[] { "add_months", "compatibility" }) {
+        for (String s : new String[] { "add_months", "compatibility", "group_by", "strict_and_legacy"}) {
             testScript("compatibility/" + s + ".sql");
         }
-
-        String decimal2;
-        if (SysProperties.BIG_DECIMAL_IS_DECIMAL) {
-            decimal2 = "decimal_decimal";
-        } else {
-            decimal2 = "decimal_numeric";
-        }
         for (String s : new String[] { "array", "bigint", "binary", "blob",
-                "boolean", "char", "clob", "date", "decimal", decimal2, "double_precision", "enum",
-                "geometry", "identity", "int", "interval", "java_object", "json", "real", "row", "smallint",
+                "boolean", "char", "clob", "date", "decfloat", "double_precision", "enum",
+                "geometry", "identity", "int", "interval", "java_object", "json", "numeric", "real", "row", "smallint",
                 "time-with-time-zone", "time", "timestamp-with-time-zone", "timestamp", "tinyint",
                 "uuid", "varbinary", "varchar", "varchar-ignorecase" }) {
             testScript("datatypes/" + s + ".sql");
         }
-        for (String s : new String[] { "alterTableAdd", "alterTableAlterColumn", "alterTableDropColumn",
-                "alterTableRename", "analyze", "createAlias", "createDomain", "createSequence", "createSynonym",
+        for (String s : new String[] { "alterDomain", "alterTableAdd", "alterTableAlterColumn", "alterTableDropColumn",
+                "alterTableDropConstraint",
+                "alterTableRename", "alterTableRenameConstraint",
+                "analyze", "commentOn", "createAlias", "createConstant", "createDomain",
+                "createIndex", "createSchema", "createSequence", "createSynonym",
                 "createTable", "createTrigger", "createView", "dropAllObjects", "dropDomain", "dropIndex",
                 "dropSchema", "dropTable", "grant", "truncateTable" }) {
             testScript("ddl/" + s + ".sql");
@@ -167,31 +162,37 @@ public class TestScript extends TestDb {
                 "merge", "mergeUsing", "replace", "script", "show", "update", "with" }) {
             testScript("dml/" + s + ".sql");
         }
-        for (String s : new String[] { "any", "array-agg", "avg", "bit-and", "bit-or", "bit-xor", "count", "envelope",
-                "every", "histogram",
+        for (String s : new String[] { "any_value", "any", "array_agg", "avg",
+                "bit_and_agg", "bit_or_agg", "bit_xor_agg",
+                "corr",
+                "count",
+                "covar_pop", "covar_samp",
+                "envelope", "every", "gcd_agg", "histogram",
                 "json_arrayagg", "json_objectagg",
                 "listagg", "max", "min", "mode", "percentile", "rank",
-                "stddev-pop", "stddev-samp", "sum", "var-pop", "var-samp" }) {
+                "regr_avgx", "regr_avgy", "regr_count", "regr_intercept", "regr_r2", "regr_slope",
+                "regr_sxx", "regr_sxy", "regr_syy",
+                "stddev_pop", "stddev_samp", "sum", "var_pop", "var_samp" }) {
             testScript("functions/aggregate/" + s + ".sql");
         }
         for (String s : new String[] { "json_array", "json_object" }) {
             testScript("functions/json/" + s + ".sql");
         }
         for (String s : new String[] { "abs", "acos", "asin", "atan", "atan2",
-                "bitand", "bitget", "bitnot", "bitor", "bitxor", "ceil", "compress",
+                "bitand", "bitcount", "bitget", "bitnot", "bitor", "bitxor", "ceil", "compress",
                 "cos", "cosh", "cot", "decrypt", "degrees", "encrypt", "exp",
-                "expand", "floor", "hash", "length", "log", "mod", "ora-hash", "pi",
-                "power", "radians", "rand", "random-uuid", "round",
-                "roundmagic", "secure-rand", "sign", "sin", "sinh", "sqrt",
+                "expand", "floor", "gcd", "hash", "length", "log", "lshift", "mod", "ora-hash", "pi",
+                "power", "radians", "rand", "random-uuid", "rotate", "round",
+                "roundmagic", "rshift", "secure-rand", "sign", "sin", "sinh", "sqrt",
                 "tan", "tanh", "truncate", "zero" }) {
             testScript("functions/numeric/" + s + ".sql");
         }
         for (String s : new String[] { "array-to-string",
-                "ascii", "bit-length", "char", "concat",
-                "concat-ws", "difference", "hextoraw", "insert", "instr",
+                "ascii", "bit-length", "btrim", "char", "concat",
+                "concat-ws", "difference", "hextoraw", "insert",
                 "left", "length", "locate", "lower", "lpad", "ltrim",
-                "octet-length", "position", "quote_ident", "rawtohex", "regexp-like",
-                "regex-replace", "repeat", "replace", "right", "rpad", "rtrim",
+                "octet-length", "quote_ident", "rawtohex", "regexp-like",
+                "regex-replace", "regexp-substr", "repeat", "replace", "right", "rpad", "rtrim",
                 "soundex", "space", "stringdecode", "stringencode",
                 "stringtoutf8", "substring", "to-char", "translate", "trim",
                 "upper", "utf8tostring", "xmlattr", "xmlcdata", "xmlcomment",
@@ -201,36 +202,42 @@ public class TestScript extends TestDb {
         for (String s : new String[] { "array-cat", "array-contains", "array-get",
                 "array-slice", "autocommit", "cancel-session", "casewhen",
                 "cardinality", "cast", "coalesce", "convert", "csvread", "csvwrite", "current_catalog",
-                "current_schema", "current_user", "currval",
-                "database-path", "decode", "disk-space-used",
+                "current_schema", "current_user", "currval", "data_type_sql",
+                "database-path", "db_object", "decode", "disk-space-used",
                 "file-read", "file-write", "greatest", "h2version", "identity",
                 "ifnull", "last-insert-id", "least", "link-schema", "lock-mode", "lock-timeout",
                 "memory-free", "memory-used", "nextval", "nullif", "nvl2",
-                "readonly", "rownum", "scope-identity", "session-id",
-                "table", "transaction-id", "truncate-value", "unnest" }) {
+                "readonly", "rownum", "session-id",
+                "table", "transaction-id", "trim_array", "truncate-value", "unnest" }) {
             testScript("functions/system/" + s + ".sql");
         }
         for (String s : new String[] { "current_date", "current_timestamp",
                 "current-time", "dateadd", "datediff", "dayname",
                 "day-of-month", "day-of-week", "day-of-year", "extract",
-                "formatdatetime", "hour", "minute", "month", "monthname",
+                "formatdatetime", "hour", "last_day", "minute", "month", "monthname",
                 "parsedatetime", "quarter", "second", "truncate", "week", "year", "date_trunc" }) {
             testScript("functions/timeanddate/" + s + ".sql");
         }
         for (String s : new String[] { "lead", "nth_value", "ntile", "ratio_to_report", "row_number" }) {
             testScript("functions/window/" + s + ".sql");
         }
-        for (String s : new String[] { "at-time-zone", "boolean-test", "case", "conditions", "data-change-delta-table",
-                "help", "sequence", "set" }) {
+        for (String s : new String[] { "at-time-zone", "boolean-test", "case", "concatenation", "conditions",
+                "data-change-delta-table", "field-reference", "help", "invisible", "sequence", "set" }) {
             testScript("other/" + s + ".sql");
         }
-        for (String s : new String[] { "in", "like", "null", "type", "unique" }) {
+        for (String s : new String[] { "comments", "identifiers" }) {
+            testScript("parser/" + s + ".sql");
+        }
+        for (String s : new String[] { "between", "distinct", "in", "like", "null", "quantified-comparison-with-array",
+                "type", "unique" }) {
             testScript("predicates/" + s + ".sql");
         }
         for (String s : new String[] { "derived-column-names", "distinct", "joins", "query-optimisations", "select",
                 "table", "values", "window" }) {
             testScript("queries/" + s + ".sql");
         }
+        testScript("other/two_phase_commit.sql");
+        testScript("other/unique_include.sql");
 
         deleteDb("script");
         System.out.flush();
@@ -301,40 +308,7 @@ public class TestScript extends TestDb {
         String s;
         boolean comment = false;
         while ((s = in.readLine()) != null) {
-            if (s.startsWith("#")) {
-                int end = s.indexOf('#', 1);
-                if (end < 3) {
-                    fail("Bad line \"" + s + '\"');
-                }
-                boolean val;
-                switch (s.charAt(1)) {
-                case '+':
-                    val = true;
-                    break;
-                case '-':
-                    val = false;
-                    break;
-                default:
-                    fail("Bad line \"" + s + '\"');
-                    return null;
-                }
-                String flag = s.substring(2, end);
-                s = s.substring(end + 1);
-                switch (flag) {
-                case "mvStore":
-                    if (config.mvStore == val) {
-                        out.print("#" + (val ? '+' : '-') + flag + '#');
-                        break;
-                    } else {
-                        if (FIX_OUTPUT) {
-                            write("#" + (val ? '+' : '-') + flag + '#' + s);
-                        }
-                        continue;
-                    }
-                default:
-                    fail("Unknown flag \"" + flag + '\"');
-                }
-            } else if (s.startsWith("--")) {
+            if (s.startsWith("--")) {
                 write(s);
                 comment = true;
                 continue;
@@ -398,6 +372,12 @@ public class TestScript extends TestDb {
                         write(sql);
                         write("");
                         allowReconnect = false;
+                        break;
+                    case "@autocommit on":
+                        conn.setAutoCommit(true);
+                        break;
+                    case "@autocommit off":
+                        conn.setAutoCommit(false);
                         break;
                     default:
                         addWriteResultError("<command>", sql);
@@ -613,6 +593,8 @@ public class TestScript extends TestDb {
                 Prepared p = (Prepared) PREPARED.get(ci);
                 if (p instanceof Query) {
                     gotOrdered = ((Query) p).hasOrder();
+                } else if (p instanceof ScriptCommand) {
+                    gotOrdered = true;
                 }
             }
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2020 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2025 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -28,6 +28,7 @@ import org.h2.engine.Database;
 import org.h2.jdbc.JdbcConnection;
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
+import org.h2.mvstore.db.LobStorageMap;
 import org.h2.mvstore.tx.TransactionStore;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
@@ -37,6 +38,7 @@ import org.h2.tools.Restore;
 import org.h2.util.IOUtils;
 import org.h2.util.JdbcUtils;
 import org.h2.util.Task;
+import org.h2.value.Value;
 
 /**
  * Tests the MVStore in a database.
@@ -54,9 +56,6 @@ public class TestMVTableEngine extends TestDb {
 
     @Override
     public boolean isEnabled() {
-        if (!config.mvStore) {
-            return false;
-        }
         return true;
     }
 
@@ -205,7 +204,7 @@ public class TestMVTableEngine extends TestDb {
             Statement stat = conn.createStatement();
             ResultSet rs = stat.executeQuery("select * " +
                     "from information_schema.settings " +
-                    "where name = 'info.PAGE_COUNT'");
+                    "where setting_name = 'info.PAGE_COUNT'");
             rs.next();
             int pages = rs.getInt(2);
             // only one lob should remain (but it is small and compressed)
@@ -242,7 +241,7 @@ public class TestMVTableEngine extends TestDb {
             Statement stat = conn.createStatement();
             ResultSet rs = stat.executeQuery("select * " +
                     "from information_schema.settings " +
-                    "where name = 'info.PAGE_COUNT'");
+                    "where setting_name = 'info.PAGE_COUNT'");
             rs.next();
             int pages = rs.getInt(2);
             // no lobs should remain
@@ -456,10 +455,10 @@ public class TestMVTableEngine extends TestDb {
             MVMap<Long, byte[]> lobData = s.openMap("lobData");
             assertEquals(0, lobData.sizeAsLong());
             assertTrue(s.hasMap("lobMap"));
-            MVMap<Long, byte[]> lobMap = s.openMap("lobMap");
+            MVMap<Long, LobStorageMap.BlobMeta> lobMap = s.openMap("lobMap");
             assertEquals(0, lobMap.sizeAsLong());
             assertTrue(s.hasMap("lobRef"));
-            MVMap<Long, byte[]> lobRef = s.openMap("lobRef");
+            MVMap<LobStorageMap.BlobReference, Value> lobRef = s.openMap("lobRef");
             assertEquals(0, lobRef.sizeAsLong());
         }
     }
@@ -672,8 +671,8 @@ public class TestMVTableEngine extends TestDb {
                 retentionTime = 0;
             }
             ResultSet rs = stat.executeQuery(
-                    "select value from information_schema.settings " +
-                    "where name='RETENTION_TIME'");
+                    "select setting_value from information_schema.settings " +
+                    "where setting_name='RETENTION_TIME'");
             assertTrue(rs.next());
             assertEquals(retentionTime, rs.getInt(1));
             stat.execute("create table test(id int primary key, data varchar)");
@@ -916,15 +915,8 @@ public class TestMVTableEngine extends TestDb {
         stat.execute("create table child(pid int)");
         stat.execute("insert into parent values(1)");
         stat.execute("insert into child values(2)");
-        try {
-            stat.execute("alter table child add constraint cp " +
-                    "foreign key(pid) references parent(id)");
-            fail();
-        } catch (SQLException e) {
-            assertEquals(
-                    ErrorCode.REFERENTIAL_INTEGRITY_VIOLATED_PARENT_MISSING_1,
-                    e.getErrorCode());
-        }
+        assertThrows(ErrorCode.REFERENTIAL_INTEGRITY_VIOLATED_PARENT_MISSING_1, stat).execute(
+                "alter table child add constraint cp foreign key(pid) references parent(id)");
         stat.execute("update child set pid=1");
         stat.execute("drop table child, parent");
 
@@ -932,15 +924,8 @@ public class TestMVTableEngine extends TestDb {
         stat.execute("create table child(pid int)");
         stat.execute("insert into parent values(1)");
         stat.execute("insert into child values(2)");
-        try {
-            stat.execute("alter table child add constraint cp " +
-                        "foreign key(pid) references parent(id)");
-            fail();
-        } catch (SQLException e) {
-            assertEquals(
-                    ErrorCode.REFERENTIAL_INTEGRITY_VIOLATED_PARENT_MISSING_1,
-                    e.getErrorCode());
-        }
+        assertThrows(ErrorCode.REFERENTIAL_INTEGRITY_VIOLATED_PARENT_MISSING_1, stat).execute(
+                "alter table child add constraint cp foreign key(pid) references parent(id)");
         stat.execute("drop table child, parent");
 
         stat.execute("create table test(id identity, parent bigint, " +
@@ -1179,7 +1164,7 @@ public class TestMVTableEngine extends TestDb {
         rs.next();
         assertEquals(1000, rs.getInt(1));
         assertEquals("", rs.getString(2));
-        assertEquals("", rs.getString(3));
+        assertEquals("          ", rs.getString(3));
         assertFalse(rs.getBoolean(4));
         assertEquals(0, rs.getByte(5));
         assertEquals(0, rs.getShort(6));
@@ -1197,7 +1182,7 @@ public class TestMVTableEngine extends TestDb {
         rs.next();
         assertEquals(1, rs.getInt(1));
         assertEquals("vc", rs.getString(2));
-        assertEquals("ch", rs.getString(3));
+        assertEquals("ch        ", rs.getString(3));
         assertTrue(rs.getBoolean(4));
         assertEquals(8, rs.getByte(5));
         assertEquals(16, rs.getShort(6));
@@ -1216,7 +1201,7 @@ public class TestMVTableEngine extends TestDb {
         assertEquals(-1, rs.getInt(1));
         assertEquals("quite a long string \u1234 \u00ff",
                 rs.getString(2));
-        assertEquals("ch", rs.getString(3));
+        assertEquals("ch        ", rs.getString(3));
         assertFalse(rs.getBoolean(4));
         assertEquals(-8, rs.getByte(5));
         assertEquals(-16, rs.getShort(6));
@@ -1234,7 +1219,7 @@ public class TestMVTableEngine extends TestDb {
         rs.next();
         assertEquals(-1000, rs.getInt(1));
         assertEquals(1000, rs.getString(2).length());
-        assertEquals("ch", rs.getString(3));
+        assertEquals("ch        ", rs.getString(3));
         assertFalse(rs.getBoolean(4));
         assertEquals(-8, rs.getByte(5));
         assertEquals(-16, rs.getShort(6));
@@ -1253,7 +1238,7 @@ public class TestMVTableEngine extends TestDb {
         stat.execute("drop table test");
 
         stat.execute("create table test(id int, obj object, " +
-                "rs result_set, arr1 int array, arr2 numeric(1000) array, ig varchar_ignorecase)");
+                "rs row(a int), arr1 int array, arr2 numeric(1000) array, ig varchar_ignorecase)");
         PreparedStatement prep = conn.prepareStatement(
                 "insert into test values(?, ?, ?, ?, ?, ?)");
         prep.setInt(1, 1);
@@ -1328,12 +1313,7 @@ public class TestMVTableEngine extends TestDb {
         assertEquals("Hello", rs.getString(2));
         assertFalse(rs.next());
 
-        try {
-            stat.execute("insert into test(id, name) values(10, 'Hello')");
-            fail();
-        } catch (SQLException e) {
-            assertEquals(e.toString(), ErrorCode.DUPLICATE_KEY_1, e.getErrorCode());
-        }
+        assertThrows(ErrorCode.DUPLICATE_KEY_1, stat).execute("insert into test(id, name) values(10, 'Hello')");
 
         rs = stat.executeQuery("select min(id), max(id), " +
                 "min(name), max(name) from test");
@@ -1381,12 +1361,7 @@ public class TestMVTableEngine extends TestDb {
         rs = stat.executeQuery("select count(*) from test");
         rs.next();
         assertEquals(3000, rs.getInt(1));
-        try {
-            stat.execute("insert into test(id) values(1)");
-            fail();
-        } catch (SQLException e) {
-            assertEquals(ErrorCode.DUPLICATE_KEY_1, e.getErrorCode());
-        }
+        assertThrows(ErrorCode.DUPLICATE_KEY_1, stat).execute("insert into test(id) values(1)");
         stat.execute("delete from test");
         stat.execute("insert into test(id, name) values(-1, 'Hello')");
         rs = stat.executeQuery("select count(*) from test where id = -1");
